@@ -1,0 +1,23 @@
+# ── SeaSID backend — pinned versions (verified-installed on the build host) ──
+# Reproducible installs. Bump deliberately and re-run tests.
+
+fastapi==0.139.0
+uvicorn==0.51.0
+sqlalchemy==2.0.51
+pydantic==2.13.4
+pandas==3.0.3
+numpy==2.5.1
+scikit-learn==1.9.0
+scipy==1.18.0
+xgboost==3.3.0
+torch==2.13.0
+openai==2.44.0
+tiktoken==0.13.0
+joblib==1.5.3
+requests==2.34.2
+python-dotenv==1.2.2
+matplotlib==3.11.0
+seaborn==0.13.2
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1

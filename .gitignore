@@ -1,0 +1,65 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# mypy / ruff
+.mypy_cache/
+.ruff_cache/
+
+# ── Backend data + ML artifacts (auto-generated, do not commit) ──────────
+backend/data/seasid.db
+backend/data/seasid.db-journal
+backend/data/seasid.db-wal
+backend/data/seasid.db-shm
+backend/data/seasid_lstm.pt
+backend/data/seasid_lstm.pt.optimizer
+backend/data/seasid_xgb.pkl
+backend/data/seasid_metrics.json
+backend/data/experiment_results.json
+backend/data/figures/
+
+# ── Node / Frontend ───────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!.env.example
+
+# ── Dev / debug artifacts (added during testing) ─────────────────────────
+*.log
+uvicorn.log
+backend/scripts/smoke_test_*.py
+backend/scripts/verify_*.py
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Misc ───────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+*.rej
+.idea/workspace.xml

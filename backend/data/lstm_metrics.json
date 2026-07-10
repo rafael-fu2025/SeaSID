@@ -1,0 +1,12 @@
+{
+  "accuracy": 0.5,
+  "precision": 0.5,
+  "recall": 1.0,
+  "f1": 0.6666666666666666,
+  "auc_roc": 0.5384615384615384,
+  "epochs_trained": 11,
+  "best_val_loss": 0.6844667792320251,
+  "final_train_loss": 0.69693390528361,
+  "n_samples": 78,
+  "arch": "lstm"
+}

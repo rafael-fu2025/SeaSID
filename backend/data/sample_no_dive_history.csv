@@ -1,0 +1,103 @@
+site_key,date,label,actual_viz_m,actual_current,source,comments
+dauin_muck,2026-05-01,dive,15.0,Low,seed,Good vis all day
+dauin_muck,2026-05-02,dive,18.0,Low,seed,Excellent for macro
+dauin_muck,2026-05-03,poor_viz,7.0,Moderate,seed,Silt from overnight rain
+dauin_muck,2026-05-04,no_dive,3.0,High,seed,Heavy rain 48h. Zero vis
+dauin_muck,2026-05-05,no_dive,2.0,High,seed,Storm surge. Boats stayed in
+dauin_muck,2026-05-06,poor_viz,8.0,Moderate,seed,Clearing after rain
+dauin_muck,2026-05-07,dive,14.0,Low,seed,Back to normal
+dauin_muck,2026-05-08,dive,20.0,Low,seed,Best day this month
+dauin_muck,2026-05-09,dive,16.0,Low,seed,Calm morning good for macro
+dauin_muck,2026-05-10,poor_viz,6.0,Moderate,seed,Afternoon rain stirred silt
+dauin_muck,2026-05-11,no_dive,4.0,High,seed,Strong winds. Choppy surface
+dauin_muck,2026-05-12,no_dive,2.5,High,seed,Continued bad weather
+dauin_muck,2026-05-13,poor_viz,9.0,Moderate,seed,Improving slowly
+dauin_muck,2026-05-14,dive,13.0,Low,seed,Nice conditions
+dauin_muck,2026-05-15,dive,17.0,Low,seed,Great day for nudibranch hunting
+dauin_muck,2026-05-16,dive,12.0,Low,seed,Slight current but ok
+dauin_muck,2026-05-17,poor_viz,8.5,Low,seed,Murky after river runoff
+dauin_muck,2026-05-18,dive,15.0,Low,seed,Good viz. Saw frogfish
+dauin_muck,2026-05-19,no_dive,3.5,High,seed,Typhoon warning
+dauin_muck,2026-05-20,no_dive,1.0,High,seed,Typhoon passed nearby
+dauin_muck,2026-05-21,poor_viz,6.5,Moderate,seed,Recovery day
+dauin_muck,2026-05-22,poor_viz,7.5,Moderate,seed,Still murky
+dauin_muck,2026-05-23,dive,11.0,Low,seed,Getting better
+dauin_muck,2026-05-24,dive,14.0,Low,seed,Normal ops resumed
+dauin_muck,2026-05-25,dive,16.0,Low,seed,Great conditions
+dauin_muck,2026-05-26,dive,18.0,Low,seed,Perfect day
+dauin_muck,2026-05-27,poor_viz,9.0,Moderate,seed,Light afternoon rain
+dauin_muck,2026-05-28,dive,13.0,Low,seed,Morning dive was fine
+dauin_muck,2026-05-29,dive,15.0,Low,seed,Good all day
+dauin_muck,2026-05-30,no_dive,4.0,High,seed,Sudden storm
+dauin_muck,2026-05-31,poor_viz,8.0,Moderate,seed,Post-storm conditions
+dauin_muck,2026-06-01,dive,12.0,Low,seed,Start of wet season but ok
+dauin_muck,2026-06-02,dive,14.0,Low,seed,Morning was great
+dauin_muck,2026-06-03,poor_viz,7.0,Moderate,seed,Afternoon rain
+dauin_muck,2026-06-04,no_dive,3.0,High,seed,Heavy sustained rain
+dauin_muck,2026-06-05,no_dive,2.0,High,seed,Flooding in low areas
+dauin_muck,2026-06-06,poor_viz,6.0,Moderate,seed,Still murky from runoff
+dauin_muck,2026-06-07,poor_viz,8.0,Low,seed,Improving
+dauin_muck,2026-06-08,dive,11.0,Low,seed,Usable vis
+dauin_muck,2026-06-09,dive,13.0,Low,seed,Good day
+dauin_muck,2026-06-10,dive,16.0,Low,seed,Excellent macro conditions
+dauin_muck,2026-06-11,dive,15.0,Low,seed,Consistent good weather
+dauin_muck,2026-06-12,poor_viz,9.0,Moderate,seed,Wind picked up
+dauin_muck,2026-06-13,dive,12.0,Low,seed,Wind died down
+dauin_muck,2026-06-14,dive,14.0,Low,seed,Nice calm day
+dauin_muck,2026-06-15,no_dive,4.5,High,seed,Southwest monsoon start
+dauin_muck,2026-06-16,no_dive,3.0,High,seed,Rough seas
+dauin_muck,2026-06-17,poor_viz,7.0,Moderate,seed,Calming down
+dauin_muck,2026-06-18,dive,10.0,Low,seed,Marginal but diveable
+dauin_muck,2026-06-19,dive,13.0,Low,seed,Good day
+dauin_muck,2026-06-20,dive,15.0,Low,seed,Great conditions
+apo_reef,2026-05-01,dive,20.0,Low,seed,Crystal clear reef dive
+apo_reef,2026-05-02,dive,22.0,Low,seed,Amazing vis. Saw turtles
+apo_reef,2026-05-03,dive,18.0,Moderate,seed,Some current at the point
+apo_reef,2026-05-04,no_dive,5.0,High,seed,Too much current for safe dive
+apo_reef,2026-05-05,no_dive,4.0,High,seed,Boat crossing too rough
+apo_reef,2026-05-06,poor_viz,8.0,Moderate,seed,Plankton bloom reduced vis
+apo_reef,2026-05-07,dive,15.0,Low,seed,Normal conditions
+apo_reef,2026-05-08,dive,25.0,Low,seed,Best vis of the season
+apo_reef,2026-05-09,dive,20.0,Low,seed,Perfect dive day
+apo_reef,2026-05-10,dive,17.0,Moderate,seed,Light current at sanctuary
+apo_reef,2026-05-11,no_dive,6.0,High,seed,Storm swell from the south
+apo_reef,2026-05-12,no_dive,3.0,High,seed,No boats crossing
+apo_reef,2026-05-13,poor_viz,9.0,Moderate,seed,Murky near shore
+apo_reef,2026-05-14,dive,14.0,Low,seed,Clearing up nicely
+apo_reef,2026-05-15,dive,18.0,Low,seed,Good reef vis
+apo_reef,2026-05-16,dive,16.0,Low,seed,Standard day
+apo_reef,2026-05-17,dive,20.0,Low,seed,Excellent conditions
+apo_reef,2026-05-18,poor_viz,7.0,Moderate,seed,Rain overnight
+apo_reef,2026-05-19,no_dive,2.0,High,seed,Typhoon approaching
+apo_reef,2026-05-20,no_dive,1.0,High,seed,Typhoon. All boats in harbor
+apo_reef,2026-05-21,no_dive,4.0,High,seed,Still dangerous waves
+apo_reef,2026-05-22,poor_viz,8.0,Moderate,seed,Calming but murky
+apo_reef,2026-05-23,poor_viz,9.0,Moderate,seed,Getting better
+apo_reef,2026-05-24,dive,12.0,Low,seed,Almost back to normal
+apo_reef,2026-05-25,dive,18.0,Low,seed,Great reef vis
+apo_reef,2026-05-26,dive,22.0,Low,seed,Stunning clarity
+apo_reef,2026-05-27,dive,19.0,Low,seed,Another great day
+apo_reef,2026-05-28,dive,15.0,Moderate,seed,Mild current
+apo_reef,2026-05-29,dive,17.0,Low,seed,Good conditions
+apo_reef,2026-05-30,no_dive,5.0,High,seed,Sudden weather change
+apo_reef,2026-05-31,poor_viz,10.0,Moderate,seed,Rough crossing
+apo_reef,2026-06-01,dive,14.0,Low,seed,Decent day
+apo_reef,2026-06-02,dive,16.0,Low,seed,Good reef dive
+apo_reef,2026-06-03,dive,18.0,Low,seed,Clear water
+apo_reef,2026-06-04,poor_viz,7.0,Moderate,seed,Rain and runoff
+apo_reef,2026-06-05,no_dive,3.0,High,seed,Dangerous conditions
+apo_reef,2026-06-06,no_dive,4.0,High,seed,High waves persist
+apo_reef,2026-06-07,poor_viz,8.0,Moderate,seed,Improving slowly
+apo_reef,2026-06-08,dive,11.0,Low,seed,Marginal but ok
+apo_reef,2026-06-09,dive,15.0,Low,seed,Nice day
+apo_reef,2026-06-10,dive,20.0,Low,seed,Beautiful conditions
+apo_reef,2026-06-11,dive,18.0,Low,seed,Consistent good weather
+apo_reef,2026-06-12,dive,16.0,Moderate,seed,Mild current
+apo_reef,2026-06-13,dive,14.0,Low,seed,Ok vis
+apo_reef,2026-06-14,poor_viz,9.0,Moderate,seed,Wind chop
+apo_reef,2026-06-15,no_dive,5.0,High,seed,Monsoon conditions
+apo_reef,2026-06-16,no_dive,4.0,High,seed,Continued rough
+apo_reef,2026-06-17,poor_viz,8.0,Moderate,seed,Settling down
+apo_reef,2026-06-18,dive,12.0,Low,seed,Back to diveable
+apo_reef,2026-06-19,dive,15.0,Low,seed,Good conditions
+apo_reef,2026-06-20,dive,18.0,Low,seed,Great day at the reef

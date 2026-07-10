@@ -1,0 +1,17 @@
+services:
+  backend:
+    build:
+      context: .
+      target: production
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - WORLDTIDES_API_KEY=${WORLDTIDES_API_KEY:-}
+    volumes:
+      - seasid-data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  seasid-data:

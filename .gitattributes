@@ -1,0 +1,33 @@
+# Normalize line endings on commit so Windows/macOS/Linux clones don't churn.
+* text=auto eol=lf
+
+# Python source — keep LF; Windows checkouts re-wrap on save.
+*.py   text eol=lf
+*.pyx  text eol=lf
+
+# Frontend — already LF on most toolchains, be explicit.
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Shell scripts must stay LF.
+*.sh   text eol=lf
+Dockerfile text eol=lf
+docker-entrypoint.sh text eol=lf
+
+# Binary artifacts — never normalize these.
+*.pt   binary
+*.pkl  binary
+*.db   binary
+*.db-* binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.svg  binary

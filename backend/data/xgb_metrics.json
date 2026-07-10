@@ -1,0 +1,10 @@
+{
+  "cv_accuracy": 0.5,
+  "cv_accuracy_std": 0.02108185106778919,
+  "cv_f1": 0.26666666666666666,
+  "cv_f1_std": 0.3265986323710904,
+  "mode": "cv",
+  "n_samples": 78,
+  "n_positive": 39,
+  "n_negative": 39
+}

@@ -1,0 +1,1 @@
+# SeaSID core library
