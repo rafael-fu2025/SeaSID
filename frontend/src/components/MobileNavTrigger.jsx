@@ -3,16 +3,16 @@ import { MenuIcon } from './icons';
 
 /**
  * MobileNavTrigger — hamburger button. Visible only when the sidebar is
- * hidden (drawer mode: < 768px viewport). Tapping it calls
+ * hidden (mobile mode: < 768px viewport). Tapping it calls
  * `toggleMobile()` which flips the body[data-sidebar-open] attribute
  * that the CSS drawer transition reads.
  *
  * Renders nothing in narrow/full modes (handled by CSS — `display: none`
- * when sidebar mode isn't drawer).
+ * when sidebar mode isn't mobile).
  */
 export default function MobileNavTrigger() {
   const { mode, mobileOpen, toggleMobile } = useSidebar();
-  if (mode !== 'drawer') return null;
+  if (mode !== 'mobile') return null;
   return (
     <button
       type="button"

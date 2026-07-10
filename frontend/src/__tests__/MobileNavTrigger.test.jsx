@@ -29,9 +29,10 @@ beforeEach(() => {
 
 /**
  * MobileNavTrigger is conditionally rendered — it returns `null` when the
- * sidebar isn't in drawer mode. jsdom defaults `window.innerWidth` to 1024,
- * so the context picks `mode="full"` by default and the trigger doesn't
- * render anything in test unless we simulate the drawer mode.
+ * sidebar isn't in mobile mode. jsdom defaults `window.innerWidth` to
+ * 1024, so the context picks `mode="desktop"` by default and the
+ * trigger doesn't render anything in test unless we simulate the
+ * mobile mode.
  */
 
 function WithMode({ mode = 'full' }) {
@@ -44,7 +45,7 @@ function WithMode({ mode = 'full' }) {
 }
 
 describe('MobileNavTrigger', () => {
-  it('returns null when not in drawer mode (jsdom default viewport)', () => {
+  it('returns null when not in mobile mode (jsdom default viewport)', () => {
     render(
       <MemoryRouter>
         <SidebarProvider>
@@ -52,16 +53,16 @@ describe('MobileNavTrigger', () => {
         </SidebarProvider>
       </MemoryRouter>
     );
-    // No trigger is rendered when the context resolves to mode !== 'drawer'.
+    // No trigger is rendered when the context resolves to mode !== 'mobile'.
     expect(screen.queryByTestId('mobile-nav-trigger')).toBeNull();
   });
 
-  it('renders a button when the context resolves to drawer mode', async () => {
-    // Stub innerWidth so bp(width) returns 'drawer'.
+  it('renders a button when the context resolves to mobile mode', async () => {
+    // Stub innerWidth so pickMode(width) returns 'mobile'.
     const originalInnerWidth = window.innerWidth;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
     vi.spyOn(window, 'matchMedia').mockImplementation((q) => {
-      const matches = q.includes('max-width: 639') ? true : false;
+      const matches = q.includes('max-width: 767') ? true : false;
       const stub = {
         matches,
         media: q,

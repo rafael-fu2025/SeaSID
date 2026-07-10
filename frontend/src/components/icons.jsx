@@ -110,6 +110,14 @@ export function ChevronRightIcon({ size = 16 }) {
   );
 }
 
+export function ChevronLeftIcon({ size = 16 }) {
+  return (
+    <svg {...baseProps(size)}>
+      <path d="M10.5 3.5L6 8L10.5 12.5" />
+    </svg>
+  );
+}
+
 export function ChevronDownIcon({ size = 16 }) {
   return (
     <svg {...baseProps(size)}>

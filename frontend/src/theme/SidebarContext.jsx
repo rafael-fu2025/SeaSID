@@ -1,40 +1,30 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 /**
- * SidebarContext — owns all sidebar state across the four breakpoints.
+ * SidebarContext — owns all sidebar state across breakpoints.
  *
- * Breakpoints (Tailwind-aligned):
- *   xs  < 640   — phone portrait
- *   sm  640–767 — phone landscape / small tablet
- *   md  768–1023 — tablet
- *   lg  1024–1439 — desktop
- *   xl  ≥1440  — wide desktop
+ * Architecture: only TWO shapes the sidebar can take.
  *
- * Sidebar shape per mode:
- *   'drawer'   : hidden by default; slide-in overlay with backdrop.
- *                Used on xs/sm and as a fallback when md is below 768.
- *   'narrow'   : persistent 64 px rail, no labels.
- *                Used on md (768–1023).
- *   'full'     : persistent sidebar; user can collapse to 64 px rail via
- *                the chevron pill. Used on lg / xl.
+ *   mode="desktop"  (>= 768 px viewport)
+ *     - Sidebar is persistent in the .app-layout flex row.
+ *     - Always visible at 232 px wide (expanded) or 64 px wide (collapsed).
+ *     - User can toggle collapsed via the button at the BOTTOM of the
+ *       sidebar footer — the conventional placement used by Linear,
+ *       Notion, Stripe. State persists in localStorage.
  *
- * Body attributes we drive (CSS reads these):
- *   data-sidebar-mode="drawer" | "narrow" | "full"
- *   data-sidebar-collapsed="true" | "false"   (only meaningful for mode=full)
- *   data-sidebar-open="true" | "false"        (only meaningful for mode=drawer)
+ *   mode="mobile"  (< 768 px viewport)
+ *     - Sidebar is hidden off-canvas as a drawer overlay.
+ *     - <MobileNavTrigger /> renders a hamburger that toggles `open`.
+ *     - Backdrop click + Esc dismiss the drawer.
+ *     - Body scroll is locked while the drawer is open.
  *
- * We pick the breakpoint on mount and on every resize listener fire (without
- * polling) and persist the user's manual collapsed preference (lg/xl only)
- * to localStorage so it survives reloads.
+ * Body attributes (read by CSS):
+ *   data-sidebar-mode="desktop" | "mobile"
+ *   data-sidebar-open="true" | "false"     (only meaningful on mobile)
+ *   data-sidebar-collapsed="true" | "false" (only meaningful on desktop)
  */
 
 const STORAGE_KEY = 'seasid.sidebar.collapsed';
-
-const bp = (w) => {
-  if (w < 768) return 'drawer';
-  if (w < 1024) return 'narrow';
-  return 'full';
-};
 
 function readStoredCollapsed() {
   try {
@@ -52,8 +42,10 @@ function writeStoredCollapsed(value) {
   }
 }
 
-/* Safe matchMedia factory — returns a working MediaQueryList stub when
-   running under test runners (jsdom) that don't implement it. */
+function pickMode(width) {
+  return width >= 768 ? 'desktop' : 'mobile';
+}
+
 function makeMatchMedia() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     const noop = () => {};
@@ -72,116 +64,88 @@ function makeMatchMedia() {
 }
 
 const SidebarContext = createContext({
-  mode: 'full',
+  mode: 'desktop',
   collapsed: false,
-  mobileOpen: false,
+  open: false,
   toggleCollapse: () => {},
   toggleMobile: () => {},
   closeMobile: () => {},
-  setCollapsed: () => {},
 });
 
 export function SidebarProvider({ children }) {
-  // SSR-safe initialiser — defaults before first effect runs.
-  const [mode, setMode] = useState('full');
+  const [mode, setMode] = useState('desktop');
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  // Initialise from window.localStorage on mount only.
+  // Read persisted collapsed on mount.
   useEffect(() => {
     setCollapsed(readStoredCollapsed());
   }, []);
 
-  // Update mode + side-effect body attributes on every meaningful
-  // change. We use `matchMedia` to subscribe to viewport changes,
-  // not constant polling.
+  // Track viewport mode via matchMedia + resize listener (defensive).
   useEffect(() => {
     const matchMedia = makeMatchMedia();
-    const compute = () => setMode(bp(window.innerWidth));
+    const compute = () => setMode(pickMode(window.innerWidth));
     compute();
 
-    const mqDesktop = matchMedia('(min-width: 1024px)');
-    const mqTablet  = matchMedia('(min-width: 768px)');
-    const mqXsOnly  = matchMedia('(max-width: 639px)');
+    const mqMobileMax = matchMedia('(max-width: 767px)');
+    const mqDesktop   = matchMedia('(min-width: 768px)');
 
-    const onMq = () => compute();
-    mqDesktop.addEventListener('change', onMq);
-    mqTablet.addEventListener('change', onMq);
-    mqXsOnly.addEventListener('change', onMq);
-
-    // Also subscribe to plain resize as a backup (covers browsers that
-    // don't fire matchMedia on virtual viewport changes like
-    // dev-tools device emulation).
-    window.addEventListener('resize', onMq);
+    const onChange = () => compute();
+    mqMobileMax.addEventListener('change', onChange);
+    mqDesktop.addEventListener('change', onChange);
+    window.addEventListener('resize', onChange);
     return () => {
-      mqDesktop.removeEventListener('change', onMq);
-      mqTablet.removeEventListener('change', onMq);
-      mqXsOnly.removeEventListener('change', onMq);
-      window.removeEventListener('resize', onMq);
+      mqMobileMax.removeEventListener('change', onChange);
+      mqDesktop.removeEventListener('change', onChange);
+      window.removeEventListener('resize', onChange);
     };
   }, []);
 
-  // Persist collapsed state when it changes (only meaningful for full mode
-  // but we save regardless — narrow/drawer never let the user collapse).
+  // Persist collapsed on change.
   useEffect(() => {
     writeStoredCollapsed(collapsed);
   }, [collapsed]);
 
-  // Mirror state into body attributes for CSS.
+  // If we leave mobile while the drawer is open, close it.
+  useEffect(() => {
+    if (mode !== 'mobile' && open) setOpen(false);
+  }, [mode, open]);
+
+  // Esc closes the drawer when open.
+  useEffect(() => {
+    if (mode !== 'mobile' || !open) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, open]);
+
+  // Body attributes that the CSS reads.
   useEffect(() => {
     const body = document.body;
     body.setAttribute('data-sidebar-mode', mode);
     body.setAttribute('data-sidebar-collapsed', collapsed ? 'true' : 'false');
-    body.setAttribute('data-sidebar-open', mobileOpen ? 'true' : 'false');
+    body.setAttribute('data-sidebar-open', open ? 'true' : 'false');
 
-    // Lock body scroll while a drawer is open.
-    if (mode === 'drawer' && mobileOpen) {
+    // Body-scroll lock while the mobile drawer is open.
+    if (mode === 'mobile' && open) {
       const prev = body.style.overflow;
       body.style.overflow = 'hidden';
       return () => {
         body.style.overflow = prev;
       };
     }
-  }, [mode, collapsed, mobileOpen]);
+  }, [mode, collapsed, open]);
 
-  // Reset ephemeral state ONLY when transitioning from drawer to a
-  // wider mode (so a window-resize from phone to desktop dismisses the
-  // drawer but the user can still toggle the drawer freely otherwise).
-  const prevModeRef = useRef(mode);
-  useEffect(() => {
-    if (prevModeRef.current === 'drawer' && mode !== 'drawer') {
-      setMobileOpen(false);
-    }
-    prevModeRef.current = mode;
-  }, [mode]);
-
-  const toggleCollapse = useCallback(() => {
-    setCollapsed((v) => !v);
-  }, []);
-
-  const setCollapsedExplicit = useCallback((next) => {
-    setCollapsed(Boolean(next));
-  }, []);
-
-  const toggleMobile = useCallback(() => {
-    setMobileOpen((v) => !v);
-  }, []);
-
-  const closeMobile = useCallback(() => {
-    setMobileOpen(false);
-  }, []);
+  const toggleCollapse = useCallback(() => setCollapsed((v) => !v), []);
+  const toggleMobile   = useCallback(() => setOpen((v) => !v), []);
+  const closeMobile     = useCallback(() => setOpen(false), []);
 
   const value = useMemo(
-    () => ({
-      mode,
-      collapsed,
-      mobileOpen,
-      toggleCollapse,
-      toggleMobile,
-      closeMobile,
-      setCollapsed: setCollapsedExplicit,
-    }),
-    [mode, collapsed, mobileOpen, toggleCollapse, toggleMobile, closeMobile, setCollapsedExplicit]
+    () => ({ mode, collapsed, open, toggleCollapse, toggleMobile, closeMobile }),
+    [mode, collapsed, open, toggleCollapse, toggleMobile, closeMobile]
   );
 
   return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;

@@ -1698,55 +1698,51 @@ body[data-sidebar-mode="drawer"] .fab {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   APP LAYOUT + RESPONSIVE SIDEBAR
+   APP LAYOUT + RESPONSIVE SIDEBAR (v2.1 redesign)
    ═══════════════════════════════════════════════════════════════════════════
-   Three shapes the sidebar can take, selected by body[data-sidebar-mode]:
+   Two shapes, no more.
 
-     • drawer   (< 768 px)   hidden by default; slides in from the left
-                              over a dimmed backdrop. Hamburger in the
-                              top-left of the main column toggles it.
-     • narrow   (768–1023 px) persistent 64 px rail; no labels, only icons.
-                              No chevron — no point, the screen is busy.
-     • full     (≥ 1024 px)   persistent 232 px sidebar; user can collapse
-                              to 64 px rail via the chevron pill.
-                              Collapsed state persists in localStorage.
+     • desktop (≥ 768 px) — Sidebar is a persistent flex item in the
+       shell. Always 232 px wide unless the user has collapsed it to a
+       64 px icon-only rail via the toggle at the BOTTOM of the sidebar
+       footer. The toggle lives inside the sidebar on purpose — it's
+       part of the natural flex layout, scrolls / sizes with the rail,
+       and never has to fight the rail's overflow. This is the
+       conventional Linear / Notion / Stripe pattern.
 
-   Every visible state of the component is driven by these CSS rules
-   alone — the React tree is mode-agnostic.
+     • mobile (< 768 px) — Sidebar is rendered as a fixed overlay
+       drawer, hidden off-canvas by default. <MobileNavTrigger />
+       renders the hamburger that flips `data-sidebar-open`, and a
+       backdrop intercepts outside clicks.
 
-   The breakpoints align with Tailwind defaults so other components
-   (hidden on mobile, single-column on tablet, etc.) reuse the same scale.
-   The drawer transition uses transform: translateX so it animates on
-   the GPU and never reflows.
+   All visible state is driven by three body attributes:
+     • data-sidebar-mode="desktop" | "mobile"
+     • data-sidebar-collapsed="true" | "false"   (desktop only)
+     • data-sidebar-open="true" | "false"        (mobile only)
 */
 
 :root {
-  /* Sidebar dimensions per mode ----------------------------------- */
-  --sidebar-w-full:         232px;
-  --sidebar-w-narrow:         64px;   /* also serves as the full->rail width */
-  --sidebar-w-drawer:        288px;  /* drawer width on phones */
+  --sidebar-w:         232px;            /* expanded desktop width   */
+  --sidebar-w-collapsed: 64px;            /* icon-only rail width     */
+  --sidebar-w-mobile:   288px;            /* drawer width on phones   */
   --sidebar-anim: 240ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   App shell — flex row by default; column on small screens (drawer mode)
-   places the (hidden) sidebar at row 1 and the main column at row 2.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
+/* App shell — desktop is a flex row; mobile is a column so the
+   drawer overlay can position above the main content. */
 .app-layout {
   display: flex;
   flex-direction: row;
   min-height: 100vh;
   position: relative;
-  /* No z-index at this level — each child declares its own. */
 }
 
 .app-main {
   flex: 1 1 auto;
   min-width: 0;
   background: var(--surface-0);
-  /* Sink below the sidebar in stacking order so the sidebar's collapse
-     pill, drawer panel, and overlays always render on top. */
+  /* Sink below the sidebar in stacking order so drawer / backdrop
+     always render on top. */
   position: relative;
   z-index: 1;
 }
@@ -1757,11 +1753,9 @@ body[data-sidebar-mode="drawer"] .fab {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Sidebar — single component, mode-agnostic JSX. CSS below is all the
-   layout decisions per data-sidebar-mode + data-sidebar-collapsed + body
-   data-sidebar-open state.
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* ─────────────────────────────────────────────────────────────────────────
+   Sidebar — single visual component, two shapes via data-mode.
+   ───────────────────────────────────────────────────────────────────────── */
 
 .sidebar {
   display: flex;
@@ -1770,103 +1764,67 @@ body[data-sidebar-mode="drawer"] .fab {
   border-right: 1px solid var(--border-subtle);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  /* Default values used by 'full' mode — overridden per-mode below. */
-  width: var(--sidebar-w-full);
-  flex: 0 0 var(--sidebar-w-full);
-  padding: var(--space-5) var(--space-3);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+  /* Desktop defaults — overridden on mobile via the data-mode selector. */
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  min-width: var(--sidebar-w-collapsed);
   position: sticky;
   top: 0;
   align-self: flex-start;
   height: 100vh;
   overflow-y: auto;
-  overflow-x: visible;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-default) transparent;
+  overflow-x: visible;          /* keep collapse button visible past the rail */
   z-index: 20;
   isolation: isolate;
   transition:
     width var(--sidebar-anim),
     flex-basis var(--sidebar-anim),
-    padding var(--sidebar-anim),
-    transform var(--sidebar-anim);
+    padding var(--sidebar-anim);
   will-change: width;
+}
+
+.sidebar[data-mode="mobile"] {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sidebar-w-mobile);
+  flex: 0 0 var(--sidebar-w-mobile);
+  border-right: 1px solid var(--border-subtle);
+  transform: translateX(-100%);
+  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 40;
+  /* Drawer needs its own scroll context, not the rail's. */
+  height: 100vh;
+}
+
+.sidebar[data-mode="mobile"][data-open="true"] {
+  transform: translateX(0);
+}
+
+/* Collapsed desktop rail */
+.sidebar[data-mode="desktop"][data-collapsed="true"] {
+  width: var(--sidebar-w-collapsed);
+  flex-basis: var(--sidebar-w-collapsed);
+  padding: var(--space-4) var(--space-2);
 }
 
 .sidebar::-webkit-scrollbar { width: 6px; }
 .sidebar::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 999px; }
 .sidebar::-webkit-scrollbar-track { background: transparent; }
 
-/* ─── full mode (≥ 1024 px) — collapsible sidebar ─────────────────────────
-   Default rules above already handle the open state. Collapse to 64 px rail
-   when the body attribute flips. */
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar {
-  width: var(--sidebar-w-narrow);
-  flex-basis: var(--sidebar-w-narrow);
-  padding: var(--space-4) var(--space-2);
-}
-
-/* ─── narrow mode (768–1023 px) — icon-only rail ─────────────────────────
-   No chevron. No labels. Always 64 px. Persistent. */
-body[data-sidebar-mode="narrow"] .sidebar {
-  width: var(--sidebar-w-narrow);
-  flex-basis: var(--sidebar-w-narrow);
-  padding: var(--space-4) var(--space-2);
-}
-
-/* ─── drawer mode (< 768 px) — overlay panel ──────────────────────────────
-   Hidden by default. Slides in from the left when the body data-sidebar-open
-   attribute flips to true. Sits on top of .app-main via the page-level
-   z-index above. */
-body[data-sidebar-mode="drawer"] .sidebar {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: var(--sidebar-w-drawer);
-  flex: 0 0 var(--sidebar-w-drawer);
-  border-right: 1px solid var(--border-subtle);
-  /* Push the sidebar off-screen by default. */
-  transform: translateX(-100%);
-  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 40;
-}
-
-body[data-sidebar-mode="drawer"][data-sidebar-open="true"] .sidebar {
-  transform: translateX(0);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Backdrop — only on drawer mode when open. Catches clicks and tap-out.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.sidebar-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.42);
-  border: 0;
-  cursor: pointer;
-  z-index: 35;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 200ms ease;
-  backdrop-filter: blur(2px);
-}
-
-body[data-sidebar-mode="drawer"][data-sidebar-open="true"] .sidebar-backdrop {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ─────────────────────────────────────────────────────────────────────────
    Brand row
-   ═══════════════════════════════════════════════════════════════════════════ */
+   ───────────────────────────────────────────────────────────────────────── */
 
 .sidebar__brand {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 0 var(--space-2);
-  margin-bottom: var(--space-6);
+  padding: var(--space-5) var(--space-4);
+  flex-shrink: 0;
 }
 
 .sidebar__brand-mark {
@@ -1881,39 +1839,43 @@ body[data-sidebar-mode="drawer"][data-sidebar-open="true"] .sidebar-backdrop {
   flex-shrink: 0;
 }
 
-.sidebar__brand-text { min-width: 0; }
+.sidebar__brand-text { min-width: 0; overflow: hidden; }
 .sidebar__brand-name {
   font-size: var(--text-md);
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.1;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 .sidebar__brand-sub {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   letter-spacing: 0.02em;
   margin-top: 2px;
+  white-space: nowrap;
 }
 
-/* In narrow mode + collapsed full mode, hide the texts. */
-body[data-sidebar-mode="narrow"] .sidebar__brand-text,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__brand-text {
+/* Hide brand text on the icon-only rail (desktop collapsed). */
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__brand-text,
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__brand-mark {
   display: none;
 }
 
-body[data-sidebar-mode="narrow"] .sidebar__brand,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__brand {
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__brand {
   justify-content: center;
-  padding: 0;
+  padding: var(--space-5) var(--space-2);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Section labels (e.g. "MAIN", "SITES")
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* ─────────────────────────────────────────────────────────────────────────
+   Nav region — flex: 1 so it scrolls between brand + footer
+   ───────────────────────────────────────────────────────────────────────── */
 
-.sidebar__section {
-  margin-top: var(--space-3);
+.sidebar__nav-region {
+  flex: 1 1 auto;
+  min-height: 0;          /* allow overflow-y: auto inside flex children */
+  overflow-y: auto;
+  padding: 0 var(--space-3) var(--space-4);
 }
 
 .sidebar__section-label {
@@ -1922,23 +1884,8 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__brand {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  padding: var(--space-2) var(--space-3);
-  transition: opacity var(--sidebar-anim);
+  padding: var(--space-2) var(--space-3) var(--space-1);
 }
-
-/* Hide section labels when the rail is icon-only. */
-body[data-sidebar-mode="narrow"] .sidebar__section-label,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__section-label {
-  opacity: 0;
-  height: 0;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Nav links
-   ═══════════════════════════════════════════════════════════════════════════ */
 
 .sidebar__nav {
   list-style: none;
@@ -1966,9 +1913,7 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__section-
   transition:
     background var(--transition-fast),
     color var(--transition-fast),
-    padding var(--sidebar-anim),
-    gap var(--sidebar-anim),
-    justify-content var(--sidebar-anim);
+    padding var(--sidebar-anim);
   min-width: 0;
   white-space: nowrap;
 }
@@ -1981,6 +1926,16 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__section-
 .sidebar__link.is-active {
   background: var(--surface-3);
   color: var(--text-primary);
+}
+
+.sidebar__link.is-active::after {
+  content: '';
+  margin-left: auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 
 .sidebar__link svg {
@@ -1998,37 +1953,44 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__section-
     max-width var(--sidebar-anim);
 }
 
-/* Hide the visible label text in icon-rail modes (narrow and
-   collapsed-full). The link is still hit-target-sized and the icon
-   stays visible. */
-body[data-sidebar-mode="narrow"] .sidebar__link > span,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__link > span {
-  opacity: 0;
-  max-width: 0;
-  pointer-events: none;
-}
-
-body[data-sidebar-mode="narrow"] .sidebar__link,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__link {
+/* Icon-only rail: hide labels, recenter icons, hide active dot. */
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__link {
   justify-content: center;
   padding: var(--space-3) var(--space-2);
   gap: 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Footer
-   ═══════════════════════════════════════════════════════════════════════════ */
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__link > span,
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__link.is-active::after,
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__section-label {
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Footer — sticky bottom, holds Region / Build / collapse toggle
+   ───────────────────────────────────────────────────────────────────────── */
 
 .sidebar__footer {
-  margin-top: auto;
-  padding: var(--space-3) var(--space-3);
+  flex-shrink: 0;
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border-subtle);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  transition: opacity var(--sidebar-anim);
+  gap: var(--space-3);
+}
+
+.sidebar__footer-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sidebar__footer-row {
@@ -2042,156 +2004,114 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__link {
   font-weight: 500;
 }
 
-body[data-sidebar-mode="narrow"] .sidebar__footer,
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__footer {
-  opacity: 0;
-  height: 0;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border-top: 0;
+/* Hide footer meta on the icon-only rail (desktop collapsed). */
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__footer-meta {
+  display: none;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Collapse / expand FAB — sibling of the sidebar, not a child.
-   ═══════════════════════════════════════════════════════════════════════════
-   This is a true FAB control:
-     - it is a child of .app-layout (not the sidebar), so it does NOT
-       inherit the sidebar's overflow, padding, or scroll behavior;
-     - it is position: absolute against .app-layout, anchored to the
-       current sidebar width via the existing --sidebar-current variable
-       (set to --sidebar-w-full when expanded, --sidebar-w-narrow when
-       collapsed), so it animates with the rail instead of jumping;
-     - its z-index is 60 — above the sidebar (20), the FAB (50), and
-       any content the main column can produce, so the chevron always
-       sits visibly on top of the seam;
-     - it is rendered only on `mode === "full"`. The drawer mode uses
-       its own close button (.sidebar__close), and the narrow rail
-       already has no labels so a collapse toggle is moot.
-   This matches the way Linear / Notion / Vercel ship their seam
-   control: a true floating affordance, not a tucked header button.
-*/
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__footer {
+  padding: var(--space-3) var(--space-2);
+}
 
-.collapse-fab {
-  position: absolute;
-  top: -14px;                              /* floats above the rail's top edge */
-  left: calc(var(--sidebar-current) - 14px); /* sits half on each side of the seam */
-  transform: translateX(-50%);
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-strong);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
+/* ─────────────────────────────────────────────────────────────────────────
+   Collapse toggle — the seam control. Lives INSIDE the sidebar footer,
+   bottom-right of the meta block. Stays part of the sidebar in both
+   expanded and collapsed states. The chevron rotates 180° to double
+   as the "expand" affordance.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.sidebar__collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
   color: var(--text-secondary);
-  z-index: 60;                              /* above sidebar (20) + AgentFab (50) */
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 2px 8px rgba(0, 0, 0, 0.30);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
   transition:
-    transform var(--sidebar-anim),
-    left var(--sidebar-anim),
     background var(--transition-fast),
     color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    border-color var(--transition-fast);
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
-/* Only on the desktop "full" mode. The drawer has its own close button,
-   and the narrow rail has nothing to collapse (it's already 64 px). */
-.collapse-fab { display: none; }
-
-body[data-sidebar-mode="full"] .collapse-fab {
-  display: grid;
-}
-
-.collapse-fab svg {
-  transition: transform var(--sidebar-anim);
-  transform: rotate(0deg);
-}
-
-.collapse-fab:hover {
+.sidebar__collapse:hover {
   background: var(--surface-2);
   color: var(--text-primary);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset,
-    0 6px 14px rgba(0, 0, 0, 0.45);
-  transform: translateX(-50%) scale(1.06);
+  border-color: var(--border-strong);
 }
 
-.collapse-fab:focus-visible {
+.sidebar__collapse:focus-visible {
   outline: none;
   box-shadow:
     0 0 0 3px var(--accent-soft),
     0 2px 8px rgba(0, 0, 0, 0.30);
 }
 
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .collapse-fab {
-  /* Collapsed = narrow rail, accent-tinted pill, chevron rotated 180°. */
+.sidebar__collapse-label {
+  white-space: nowrap;
+}
+
+.sidebar__collapse svg {
+  transition: transform var(--sidebar-anim);
+}
+
+/* Collapsed state: shrink the label out (we're now icon-only) and
+   rotate the chevron 180° to indicate "expand". */
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__collapse-label {
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__collapse {
   background: var(--accent-soft);
   color: var(--accent);
   border-color: var(--accent-line);
+  padding: var(--space-2);
 }
 
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .collapse-fab svg {
+.sidebar[data-mode="desktop"][data-collapsed="true"] .sidebar__collapse svg {
   transform: rotate(180deg);
 }
 
-.collapse-fab::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 999px;
-  background: transparent;
-  transition: background var(--transition-fast);
-  pointer-events: none;
-}
-
-.collapse-fab:active::after {
-  background: var(--accent-soft);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Drawer close button — top-right of the drawer panel.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.sidebar__close {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius);
-  background: transparent;
-  border: 1px solid transparent;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast),
-    border-color var(--transition-fast);
-  z-index: 1;
-}
-
-/* Hide on every mode except drawer. */
-body[data-sidebar-mode="full"] .sidebar__close,
-body[data-sidebar-mode="narrow"] .sidebar__close {
+/* Hide the collapse toggle on mobile — the drawer has its own close. */
+.sidebar[data-mode="mobile"] .sidebar__collapse {
   display: none;
 }
 
-.sidebar__close:hover {
-  background: var(--surface-2);
-  color: var(--text-primary);
-  border-color: var(--border-default);
+/* ─────────────────────────────────────────────────────────────────────────
+   Backdrop — only when the mobile drawer is open
+   ───────────────────────────────────────────────────────────────────────── */
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  border: 0;
+  cursor: pointer;
+  z-index: 35;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+  backdrop-filter: blur(2px);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Hamburger trigger — fixed top-left, only on drawer mode.
-   ═══════════════════════════════════════════════════════════════════════════ */
+body[data-sidebar-open="true"] .sidebar-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Mobile nav trigger — hamburger pill anchored top-left of the screen
+   ───────────────────────────────────────────────────────────────────────── */
 
 .mobile-nav-trigger {
   position: fixed;
@@ -2216,16 +2136,15 @@ body[data-sidebar-mode="narrow"] .sidebar__close {
 .mobile-nav-trigger:hover { background: var(--surface-2); }
 .mobile-nav-trigger:active { transform: scale(0.96); }
 
-/* Hide on every mode except drawer. The component itself returns null,
-   but this rule is defense-in-depth in case the implementation ever
-   changes. */
-body:not([data-sidebar-mode="drawer"]) .mobile-nav-trigger {
+/* Hide on desktop — handled by the JS guard in MobileNavTrigger
+   but defense-in-depth via CSS too. */
+body:not([data-sidebar-mode="mobile"]) .mobile-nav-trigger {
   display: none;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ─────────────────────────────────────────────────────────────────────────
    Container padding adjustments per breakpoint
-   ═══════════════════════════════════════════════════════════════════════════ */
+   ───────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 1023px) {
   .container { padding: var(--space-6) var(--space-6); }
@@ -2234,7 +2153,6 @@ body:not([data-sidebar-mode="drawer"]) .mobile-nav-trigger {
   .container { padding: var(--space-5) var(--space-4); }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
    Reduced motion — kill every transition by default.
    ═══════════════════════════════════════════════════════════════════════════ */
 
