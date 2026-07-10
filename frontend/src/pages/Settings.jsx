@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
-  Settings as SettingsIcon, Palette, Bot, Database,
+  Palette, Bot, Database,
   Sun, Moon, Info, Sparkles, InfoIcon,
 } from 'lucide-react';
 import { api } from '@/api';
@@ -69,17 +69,12 @@ export default function Settings() {
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
-      <header>
-        <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-md bg-reef text-reef-foreground">
-            <SettingsIcon className="size-4" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Personalize the dashboard, change the default site, and inspect every agent tool.
-            </p>
-          </div>
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Personalize the dashboard, change the default site, and inspect every agent tool.
+          </p>
         </div>
       </header>
 

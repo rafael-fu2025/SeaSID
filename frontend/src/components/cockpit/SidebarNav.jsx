@@ -1,7 +1,7 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import {
   Gauge, Waves, Map, FlaskConical, ClipboardCheck,
-  Settings2, WavesIcon,
+  Settings2, Waves as WavesIcon, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -9,15 +9,24 @@ import { cn } from '@/lib/utils';
 /**
  * SidebarNav — left rail of the SeaSID cockpit.
  *
- *  - Vertical icon rail, fixed width (managed by the parent PanelGroup).
- *  - NavLink active styling comes from react-router; we add visual
- *    reinforcement with a "is-active" className so the active page
- *    has a left accent bar.
- *  - Sites are static (Dauin Muck / Apo Reef) for v3 but live behind
- *    a section header so future sites are just a list push.
+ * Two-mode design:
  *
- * No collapse toggle — the cockpit shell is always-visible by design.
- * Resizing is handled by drag on the parent `ResizableHandle`.
+ *   collapsed  (default 64 px)
+ *     - Brand chip stays visible so the user can always find the
+ *       collapse handle.
+ *     - Each nav entry is icon-only; tooltip on hover for the label.
+ *     - A `PanelLeftOpen` chevron at the bottom expands the rail.
+ *
+ *   expanded   (default 240 px)
+ *     - Icons gain visible labels on the right.
+ *     - Site list shows full site name + type tag.
+ *     - A `PanelLeftClose` chevron at the bottom collapses the rail.
+ *     - A small "Reset" link appears in the footer to wipe persisted
+ *       layout state when the user can't recover.
+ *
+ * Widths are owner-controlled by the parent Layout via ResizablePanel's
+ * `collapsedSize` / `minSize` props; this component just renders the
+ * current mode and surfaces a way to toggle.
  */
 const NAV = [
   { to: '/',            label: 'Dashboard',   Icon: Gauge },
@@ -33,127 +42,208 @@ const SITES = [
   { key: 'apo_reef',   name: 'Apo Reef',   type: 'reef' },
 ];
 
-function linkClass({ isActive }) {
-  return cn(
-    'group relative flex h-10 w-10 items-center justify-center rounded-md',
-    'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-    isActive && 'bg-muted text-reef',
-  );
-}
-
-function SiteDot({ type }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'inline-block size-1.5 rounded-full',
-        type === 'reef' ? 'bg-reef' : 'bg-positive',
-      )}
-    />
-  );
-}
-
-export function SidebarNav() {
-  const location = useLocation();
-
+export function SidebarNav({
+  collapsed = false,
+  onToggle,
+  onResetLayout,
+  hideCollapseChevron = false,
+}) {
   return (
     <aside
       aria-label="Primary navigation"
-      className="flex h-full w-full flex-col border-r border-border bg-card text-foreground"
+      data-collapsed={collapsed ? 'true' : 'false'}
+      className="flex h-full w-full flex-col border-r border-border bg-card text-foreground transition-[width] duration-200"
     >
-      {/* Brand */}
-      <div className="flex items-center justify-center border-b border-border px-2 py-3">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="flex size-9 items-center justify-center rounded-md bg-reef text-reef-foreground shadow-sm"
-              aria-label="SeaSID"
-            >
-              <WavesIcon className="size-5" />
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <span className="font-semibold">SeaSID</span>
-            <span className="ml-1 text-xs text-muted-foreground">v3.0</span>
-          </TooltipContent>
-        </Tooltip>
-      </div>
+      {/* Brand — always visible at top */}
+      <NavLink
+        to="/"
+        aria-label="SeaSID — go to Dashboard"
+        data-testid="brand-link"
+        className={cn(
+          'flex shrink-0 items-center border-b border-border py-3',
+          collapsed ? 'justify-center px-2' : 'gap-2 px-3',
+        )}
+      >
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-reef text-reef-foreground shadow-sm">
+          <WavesIcon className="size-5" />
+        </div>
+        {!collapsed && (
+          <div className="min-w-0 leading-tight">
+            <div className="truncate text-sm font-semibold tracking-tight">SeaSID</div>
+            <div className="truncate text-[11px] text-muted-foreground">Dumaguete · v3</div>
+          </div>
+        )}
+      </NavLink>
 
-      {/* Page nav */}
-      <nav aria-label="Pages" className="flex flex-col items-center gap-1 px-2 py-3">
-        <span className="sr-only">Pages</span>
-        {NAV.map(({ to, label, Icon }) => (
-          <Tooltip key={to}>
-            <TooltipTrigger asChild>
-              <NavLink
-                to={to}
-                end={to === '/'}
-                className={linkClass}
-                aria-label={label}
-                data-testid={`nav-${label.toLowerCase()}`}
-              >
-                <Icon className="size-4" />
-                {/* Accent bar for active state */}
-                <span
-                  aria-hidden
-                  className={cn(
-                    'absolute left-0 top-1.5 h-7 w-0.5 rounded-r-full bg-reef transition-opacity',
-                    location.pathname === to || (to !== '/' && location.pathname.startsWith(to))
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-50',
+      {/* Pages */}
+      <nav
+        aria-label="Pages"
+        className={cn('flex flex-col gap-1 py-3', collapsed ? 'items-center px-2' : 'px-2')}
+      >
+        {NAV.map(({ to, label, Icon }) => {
+          const linkEl = (
+            <NavLink
+              to={to}
+              end={to === '/'}
+              aria-label={collapsed ? label : undefined}
+              data-testid={`nav-${label.toLowerCase()}`}
+              className={({ isActive }) =>
+                cn(
+                  'group relative flex h-10 items-center rounded-none transition-colors',
+                  collapsed ? 'w-10 justify-center' : 'w-full gap-3 px-3',
+                  'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  isActive && 'bg-muted text-reef',
+                )
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon className="size-4 shrink-0" />
+                  {!collapsed && (
+                    <span className="truncate text-sm">{label}</span>
                   )}
-                />
-              </NavLink>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              {label}
-              {label === 'Dashboard' && (
-                <span className="ml-1 text-xs text-muted-foreground">⌘1</span>
+                  {!collapsed && isActive && (
+                    <span aria-hidden className="ml-auto size-1.5 rounded-full bg-reef" />
+                  )}
+                </>
               )}
-            </TooltipContent>
-          </Tooltip>
-        ))}
+            </NavLink>
+          );
+          if (collapsed) {
+            return (
+              <Tooltip key={to}>
+                <TooltipTrigger asChild>{linkEl}</TooltipTrigger>
+                <TooltipContent side="right">{label}</TooltipContent>
+              </Tooltip>
+            );
+          }
+          return <div key={to}>{linkEl}</div>;
+        })}
       </nav>
 
       {/* Divider */}
-      <div className="mx-2 my-2 h-px bg-border" aria-hidden />
+      <div className={cn('h-px shrink-0 bg-border', collapsed ? 'mx-2' : 'mx-3')} aria-hidden />
 
-      {/* Site list */}
-      <div className="flex flex-col items-center gap-1 px-2">
-        <span className="sr-only">Sites</span>
-        {SITES.map((site) => (
-          <Tooltip key={site.key}>
+      {/* Sites */}
+      <div
+        aria-label="Sites"
+        className={cn('flex flex-col gap-1 py-3', collapsed ? 'items-center px-2' : 'px-2')}
+      >
+        {SITES.map((site) => {
+          const dot = (
+            <span
+              aria-hidden
+              className={cn(
+                'inline-block size-1.5 shrink-0 rounded-full',
+                site.type === 'reef' ? 'bg-reef' : 'bg-positive',
+              )}
+            />
+          );
+          if (collapsed) {
+            return (
+              <Tooltip key={site.key}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={site.name}
+                    className={cn(
+                      'flex size-9 items-center justify-center rounded-none text-muted-foreground',
+                      'transition-colors hover:bg-muted hover:text-foreground',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                    )}
+                  >
+                    {dot}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {site.name}
+                  <span className="ml-1 text-xs uppercase tracking-wider text-muted-foreground">
+                    {site.type}
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+            );
+          }
+          return (
+            <button
+              key={site.key}
+              type="button"
+              data-testid={`site-link-${site.key}`}
+              className="flex h-10 w-full items-center gap-3 rounded-none px-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {dot}
+              <span className="truncate text-sm">{site.name}</span>
+              <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">
+                {site.type}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex-1" />
+
+      {/* Footer — collapse toggle + API pulse (+ Reset link when expanded) */}
+      <div
+        className={cn(
+          'flex shrink-0 items-center gap-2 border-t border-border',
+          collapsed ? 'flex-col justify-center px-2 py-2' : 'px-3 py-2',
+        )}
+      >
+        {!hideCollapseChevron && (
+          <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label={site.name}
-                className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                onClick={onToggle}
+                aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-pressed={collapsed}
+                data-testid="nav-collapse"
+              className={cn(
+                'inline-flex items-center justify-center rounded-none text-muted-foreground transition-colors',
+                'hover:bg-muted hover:text-foreground',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                collapsed ? 'size-8' : 'h-7 px-2',
+              )}
               >
-                <SiteDot type={site.type} />
+                {collapsed ? (
+                  <PanelLeftOpen className="size-3.5" />
+                ) : (
+                  <>
+                    <PanelLeftClose className="size-3.5" />
+                    <span className="ml-1.5 text-xs">Collapse</span>
+                  </>
+                )}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">
-              {site.name}
-              <span className="ml-1 text-xs uppercase tracking-wide text-muted-foreground">
-                {site.type}
-              </span>
+            <TooltipContent side={collapsed ? 'right' : 'top'}>
+              {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             </TooltipContent>
           </Tooltip>
-        ))}
-      </div>
+        )}
 
-      {/* Bottom spacer */}
-      <div className="flex-1" />
-
-      {/* Footer micro-meta */}
-      <div className="flex items-center justify-center border-t border-border px-2 py-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex size-2 rounded-full bg-positive shadow-[0_0_0_3px_rgba(108,202,143,0.18)]" aria-hidden />
+            <span
+              aria-hidden
+              className="inline-flex size-2 rounded-full bg-positive shadow-[0_0_0_4px_rgba(108,202,143,0.18)]"
+              data-testid="nav-api-pulse"
+            />
           </TooltipTrigger>
-          <TooltipContent side="right">API online</TooltipContent>
+          <TooltipContent side={collapsed ? 'right' : 'top'}>API online</TooltipContent>
         </Tooltip>
+
+        {!collapsed && onResetLayout && (
+          <button
+            type="button"
+            onClick={onResetLayout}
+            aria-label="Reset cockpit layout to defaults"
+            className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          >
+            Reset
+          </button>
+        )}
       </div>
     </aside>
   );

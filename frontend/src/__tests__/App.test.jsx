@@ -23,14 +23,21 @@ vi.mock('@/api', () => ({
 
 describe('App routing', () => {
   it('renders the cockpit shell (brand, nav, FAB, status bar) on /', async () => {
+    // Wipe layout prefs so this test isn't sensitive to leftover
+    // localStorage from a prior session.
+    try {
+      localStorage.removeItem('seasid.cockpit.leftCollapsed');
+      localStorage.removeItem('seasid.cockpit.rightCollapsed');
+      localStorage.removeItem('seasid.cockpit.v3');
+    } catch {}
     window.history.pushState({}, '', '/');
     render(
       <TooltipProvider>
         <App />
       </TooltipProvider>,
     );
-    // Brand chip
-    expect(screen.getByLabelText('SeaSID')).toBeInTheDocument();
+    // Brand chip — the NavLink has aria-label "SeaSID — go to Dashboard".
+    expect(screen.getByLabelText(/SeaSID/i)).toBeInTheDocument();
     // Dashboard heading
     expect(await screen.findByRole('heading', { name: /dashboard/i })).toBeInTheDocument();
     // Floating AI button

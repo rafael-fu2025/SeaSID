@@ -1,16 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Send, RefreshCw } from 'lucide-react';
+import { Bot, Send, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { api } from '@/api';
+import { api, streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
+import { Message } from './agent/Message';
+import { StreamingDots } from './agent/StreamingDots';
+import {
+  makeThinkingState, feedThinking, flushThinking,
+} from './agent/streaming-thinking';
+
+/**
+ * newMessageId — small monotonic id generator for client-side message
+ * tracking. The server uses UUIDs; locally we just need a unique key.
+ */
+let _id = 0;
+function newMessageId() {
+  _id += 1;
+  return `m-${Date.now().toString(36)}-${_id}`;
+}
 
 /**
  * AgentFab — floating AI assistant.
@@ -54,20 +70,132 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const send = async () => {
     const text = draft.trim();
     if (!text || busy) return;
-    const next = [...messages, { role: 'user', content: text }];
-    setMessages(next);
+    const userMsg = { id: newMessageId(), role: 'user', content: text };
+    const assistantMsg = {
+      id: newMessageId(),
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      toolCalls: [],
+      status: 'streaming',
+    };
+    setMessages([...messages, userMsg, assistantMsg]);
     setDraft('');
     setBusy(true);
+
+    const controller = new AbortController();
+    const think = makeThinkingState();
+
+    /**
+     * Helper: patch the assistant message in-place by id.
+     * `patch` is a Partial<UiMessage> or a function (prev) => Partial.
+     */
+    const patchAssistant = (patch) => {
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== assistantMsg.id) return m;
+        return typeof patch === 'function' ? { ...m, ...patch(m) } : { ...m, ...patch };
+      }));
+    };
+
     try {
-      const res = await api.chat(text, conversationId, siteKey);
-      setConversationId(res.conversation_id || conversationId);
-      setMessages([...next, {
-        role: 'assistant',
-        content: res.response || '_(no response)_',
-        tool_calls: res.tool_calls,
-      }]);
+      for await (const ev of streamChat({
+        message: text,
+        conversationId,
+        siteKey,
+        signal: controller.signal,
+      })) {
+        switch (ev.type) {
+          case 'status':
+            if (ev.conversation_id) {
+              setConversationId((cur) => cur || ev.conversation_id);
+            }
+            break;
+
+          case 'text': {
+            const split = feedThinking(think, ev.delta);
+            if (split.visible) {
+              patchAssistant((prev) => ({
+                content: (prev.content ?? '') + split.visible,
+              }));
+            }
+            if (split.thinking) {
+              patchAssistant((prev) => ({
+                thinking: (prev.thinking ?? '') + split.thinking,
+              }));
+            }
+            break;
+          }
+
+          case 'tool_call':
+            patchAssistant((prev) => ({
+              toolCalls: [
+                ...(prev.toolCalls ?? []),
+                {
+                  id: ev.id,
+                  name: ev.name,
+                  arguments: ev.arguments,
+                  status: 'running',
+                },
+              ],
+            }));
+            break;
+
+          case 'tool_result':
+            patchAssistant((prev) => ({
+              toolCalls: (prev.toolCalls ?? []).map((tc) =>
+                tc.id === ev.id
+                  ? {
+                      ...tc,
+                      status: ev.output?.startsWith?.('"error"') ? 'error' : 'complete',
+                      output: ev.output,
+                      durationMs: ev.durationMs,
+                    }
+                  : tc,
+              ),
+            }));
+            break;
+
+          case 'usage':
+            patchAssistant({
+              usage: {
+                promptTokens:     ev.promptTokens,
+                completionTokens: ev.completionTokens,
+                totalTokens:      ev.promptTokens + ev.completionTokens,
+              },
+            });
+            break;
+
+          case 'done':
+            // Flush any leftover buffer to the appropriate lane.
+            const tail = flushThinking(think);
+            if (tail.visible) {
+              patchAssistant((prev) => ({
+                content: (prev.content ?? '') + tail.visible,
+              }));
+            }
+            if (tail.thinking) {
+              patchAssistant((prev) => ({
+                thinking: (prev.thinking ?? '') + tail.thinking,
+              }));
+            }
+            patchAssistant({ status: 'done' });
+            break;
+
+          case 'error':
+            patchAssistant({
+              status: 'error',
+              content: (assistantMsg.content || '') + (ev.message ? '\n\n' + ev.message : ''),
+            });
+            break;
+        }
+      }
     } catch (err) {
-      setMessages([...next, { role: 'error', content: err.message }]);
+      // AbortError is a normal cancellation, not a UI error.
+      if (err?.name === 'AbortError') {
+        patchAssistant({ status: 'done' });
+      } else {
+        patchAssistant({ status: 'error', content: err.message });
+      }
     } finally {
       setBusy(false);
     }
@@ -107,31 +235,51 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
 
       <SheetContent
         side="right"
+        showCloseButton={false}
         className="flex h-full w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
       >
-        <SheetHeader className="flex flex-row items-start justify-between gap-3 border-b border-border bg-card px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-md bg-reef text-reef-foreground">
-              <Bot className="size-4" />
+        <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-border bg-card px-5 py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {/* Square bot avatar w/ live-status pulse on the bottom-right
+                corner so the user can tell at a glance that the agent
+                is online. Sits flush with the header so the agent
+                profile reads "own" rather than "decorative". */}
+            <div
+              className="relative flex size-10 shrink-0 items-center justify-center bg-reef text-reef-foreground"
+              aria-hidden
+            >
+              <Bot className="size-5" />
+              <span
+                className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_2px_var(--card)]"
+                data-testid="agent-status-dot"
+              />
             </div>
-            <div>
-              <SheetTitle className="text-base">SeaSID Agent</SheetTitle>
-              <SheetDescription className="text-xs">
-                AI briefing · 7 tools · live for <span className="font-mono">{siteKey}</span>
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
+              <SheetDescription className="mt-0.5 text-xs leading-snug">
+                <span className="font-mono text-foreground">{siteKey}</span>
+                <span className="mx-1 text-muted-foreground/50">·</span>
+                7 tools · live briefing
               </SheetDescription>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            onClick={reset}
-            aria-label="Reset conversation"
-            data-testid="agent-reset"
-            disabled={messages.length === 0}
-          >
-            <RefreshCw className="size-3.5" />
-          </Button>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0"
+                onClick={reset}
+                aria-label="Reset conversation"
+                data-testid="agent-reset"
+                disabled={messages.length === 0}
+              >
+                <RotateCcw className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset conversation</TooltipContent>
+          </Tooltip>
         </SheetHeader>
 
         <div
@@ -144,12 +292,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           ) : (
             <div className="flex flex-col gap-3">
               {messages.map((m, i) => (
-                <Message key={i} role={m.role} content={m.content} toolCalls={m.tool_calls} />
+                <Message key={i} message={m} />
               ))}
               {busy && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Skeleton className="size-3 rounded-full" />
-                  <Skeleton className="h-3 w-16" />
+                <div
+                  className="flex items-center gap-2 pl-1.5 text-xs text-muted-foreground"
+                  data-testid="agent-busy"
+                >
+                  <StreamingDots />
                   <span>Agent thinking…</span>
                 </div>
               )}
@@ -214,39 +364,6 @@ function EmptyState({ siteKey }) {
             {p}
           </span>
         ))}
-      </div>
-    </div>
-  );
-}
-
-function Message({ role, content, toolCalls }) {
-  if (role === 'error') {
-    return (
-      <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
-        {content}
-      </div>
-    );
-  }
-  if (role === 'user') {
-    return (
-      <div className="rounded-md border border-border bg-card p-3">
-        <div className="text-xs font-medium text-muted-foreground">You</div>
-        <div className="mt-1 text-sm text-foreground">{content}</div>
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-md border border-reef/30 bg-reef/5 p-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-medium text-reef">Agent</div>
-        {toolCalls && toolCalls.length > 0 && (
-          <Badge variant="secondary" className="font-mono text-[10px]">
-            {toolCalls.length} tool{toolCalls.length === 1 ? '' : 's'}
-          </Badge>
-        )}
-      </div>
-      <div className="mt-1.5">
-        <MarkdownResponse>{content}</MarkdownResponse>
       </div>
     </div>
   );

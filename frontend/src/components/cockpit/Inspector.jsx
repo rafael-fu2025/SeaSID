@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useLiveInspectorData } from './useInspectorData';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -8,67 +8,54 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
-  Activity, Droplets, Wind, Thermometer, Gauge, MapPin,
-  Calendar, Sparkles, Info,
+  Activity, Droplets, Wind, Thermometer, MapPin,
+  Sparkles, Info, PanelRightClose, PanelRightOpen, AlertTriangle,
 } from 'lucide-react';
 
 /**
  * Inspector — right rail of the SeaSID cockpit.
  *
- *  - Always shows route-specific live data (forecast KPIs, alert count,
- *    optimal window) regardless of which page is active.
- *  - Data hook pulls forecast+alerts for the currently selected site
- *    so the inspector is never empty while the rest of the app loads.
- *  - Tries hard not to be a "blank rectangle": the top always shows
- *    the selected site name, and at least one of AQI / wind / wave
- *    given the API response.
+ * Two-mode design:
  *
- * Width is owned by the parent PanelGroup's resize handle; this
- * component just fills the panel.
+ *   expanded   (default ~360 px)
+ *     - "Inspector" header + collapse button.
+ *     - LIVE AT · selected site, current risk chip.
+ *     - RIGHT NOW · 2×2 KPI grid (P(no-go), AQI, Wind, Sea °C).
+ *     - OPTIMAL WINDOW · reef-bordered card with time + P(no-go).
+ *     - ACTIVE ALERTS · list (or "No active alerts · conditions
+ *       nominal." when there are none).
+ *     - Context footer pointing at the active site.
+ *
+ *   collapsed  (default ~56 px)
+ *     - Tiny vertical strip with: API pulse, alert count, optimal
+ *       P(no-go) %. Always enough to know "is the cockpit healthy?"
+ *     - A `PanelRightOpen` chevron at the top restores the panel.
+ *
+ * Width is owned by the parent Layout's ResizablePanel; this component
+ * just renders the appropriate variant and forwards the toggle.
  */
-export function Inspector({ siteKey }) {
+export function Inspector({
+  siteKey = 'dauin_muck',
+  collapsed = false,
+  onToggle,
+  hideCollapseChevron = false,
+}) {
   const location = useLocation();
   const { data, loading, error } = useLiveInspectorData(siteKey);
+  const canvasRef = useRef(null);
 
-  if (loading && !data) {
-    return (
-      <aside
-        aria-label="Live inspector"
-        className="flex h-full flex-col border-l border-border bg-card"
-      >
-        <Header />
-        <ScrollArea className="flex-1 px-4">
-          <div className="flex flex-col gap-3 py-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-12 w-full rounded-md" />
-            ))}
-          </div>
-        </ScrollArea>
-      </aside>
-    );
-  }
+  // Pass-through for imperative resize when content updates (best effort).
+  const [, setTick] = useState(0);
+  useEffect(() => { setTick((n) => n + 1); }, [data]);
 
-  if (error && !data) {
-    return (
-      <aside
-        aria-label="Live inspector"
-        className="flex h-full flex-col border-l border-border bg-card"
-      >
-        <Header />
-        <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          <Info className="mr-2 size-4" />
-          <span>Inspector offline · start the API.</span>
-        </div>
-      </aside>
-    );
-  }
+  if (collapsed) return <CollapsedInspector data={data} loading={loading} error={error} onToggle={onToggle} />;
 
   return (
     <aside
       aria-label="Live inspector"
       className="flex h-full flex-col border-l border-border bg-card"
     >
-      <Header />
+      <Header onToggle={onToggle} hideCollapseChevron={hideCollapseChevron} />
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-5 px-4 pb-6 pt-4">
@@ -78,12 +65,10 @@ export function Inspector({ siteKey }) {
               Live at
             </h2>
             <div className="flex items-baseline justify-between gap-2">
-              <span className="truncate text-base font-semibold text-foreground">
-                {data?.site_name ?? 'Dauin Muck'}
+              <span className="truncate text-base font-semibold tracking-tight text-foreground">
+                {data?.site_name ?? (loading ? '…' : 'Dauin Muck')}
               </span>
-              {data?.current_risk && (
-                <RiskChip risk={data.current_risk} />
-              )}
+              {data?.current_risk && <RiskChip risk={data.current_risk} />}
             </div>
             <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
               <MapPin className="size-3" />
@@ -98,7 +83,20 @@ export function Inspector({ siteKey }) {
             <h2 id="inspector-kpis" className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Right now
             </h2>
-            <KpiGrid data={data} />
+            {error && !data ? (
+              <p className="text-xs text-muted-foreground">
+                <Info className="mr-1 inline size-3 align-text-top" />
+                Inspector offline — start the API.
+              </p>
+            ) : loading && !data ? (
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full rounded-md" />
+                ))}
+              </div>
+            ) : (
+              <KpiGrid data={data} />
+            )}
           </section>
 
           <Separator />
@@ -109,7 +107,7 @@ export function Inspector({ siteKey }) {
               <h2 id="inspector-optimal" className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Optimal window
               </h2>
-              <div className="rounded-md border border-border bg-background p-3">
+              <div className="rounded-md border border-reef/40 bg-background p-3" data-testid="inspector-optimal-card">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-lg text-foreground">
                     {new Date(data.optimal_window.ts).toLocaleTimeString([], {
@@ -131,19 +129,20 @@ export function Inspector({ siteKey }) {
             </section>
           )}
 
-          {/* Alerts summary */}
+          {/* Alerts */}
           <section aria-labelledby="inspector-alerts">
             <h2 id="inspector-alerts" className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Active alerts
             </h2>
-            {data?.alert_count > 0 ? (
+            {data && data.alert_count > 0 ? (
               <ul className="space-y-1.5">
                 {data.top_alerts.map((a) => (
                   <li
                     key={`${a.kind}-${a.message}`}
                     className="flex items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                    data-testid="inspector-alert-row"
                   >
-                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-warning" aria-hidden />
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
                     <span className="truncate">
                       <span className="font-mono text-foreground">{a.kind}</span>{' '}
                       <span className="text-muted-foreground">{a.message}</span>
@@ -160,10 +159,10 @@ export function Inspector({ siteKey }) {
 
           <Separator />
 
-          {/* Context note */}
           <p className="text-[11px] leading-snug text-muted-foreground">
             <Info className="mr-1 inline size-3 align-text-top" />
-            Live inspector tracks <span className="font-mono text-foreground">{data?.site_key ?? siteKey}</span>.
+            Live inspector tracks{' '}
+            <span className="font-mono text-foreground">{data?.site_key ?? siteKey}</span>.
             Switch sites in the page header to re-aim.
           </p>
 
@@ -174,16 +173,116 @@ export function Inspector({ siteKey }) {
   );
 }
 
-function Header() {
+function Header({ onToggle, hideCollapseChevron }) {
   return (
-    <div className="border-b border-border px-4 py-3">
+    <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
       <div className="flex items-center gap-2">
         <Activity className="size-3.5 text-reef" />
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-foreground">
-          Inspector
-        </h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-foreground">Inspector</h2>
       </div>
+      {!hideCollapseChevron && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-label="Collapse inspector"
+              aria-pressed={false}
+              data-testid="inspector-collapse"
+              className="inline-flex size-7 items-center justify-center rounded-none text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              <PanelRightClose className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Collapse inspector</TooltipContent>
+        </Tooltip>
+      )}
     </div>
+  );
+}
+
+function CollapsedInspector({ data, loading, error, onToggle, hideCollapseChevron }) {
+  const apiOk = !error && (data || loading);
+  const alertCount = data?.alert_count ?? 0;
+  const optimalPct = data?.optimal_window
+    ? Math.round(data.optimal_window.p_bad * 100)
+    : null;
+
+  return (
+    <aside
+      aria-label="Live inspector"
+      data-collapsed="true"
+      className="flex h-full flex-col items-stretch border-l border-border bg-card"
+    >
+      {!hideCollapseChevron && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-label="Expand inspector"
+              aria-pressed={true}
+              data-testid="inspector-expand"
+              className="mx-auto mt-2 inline-flex size-7 items-center justify-center rounded-none text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              <PanelRightOpen className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Expand inspector</TooltipContent>
+        </Tooltip>
+      )}
+
+      <Separator className="mx-2 mt-2" />
+
+      {/* Vertical status strip */}
+      <div className="flex flex-1 flex-col items-center gap-3 py-4 text-center">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              aria-hidden
+              className={cn(
+                'inline-flex size-2 rounded-full',
+                apiOk ? 'bg-positive shadow-[0_0_0_4px_rgba(108,202,143,0.18)]' : 'bg-danger shadow-[0_0_0_4px_rgba(224,114,121,0.18)]',
+              )}
+              data-testid="inspector-collapsed-api"
+            />
+          </TooltipTrigger>
+          <TooltipContent side="left">{apiOk ? 'API online' : 'API offline'}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex flex-col items-center" data-testid="inspector-collapsed-alerts">
+              <AlertTriangle className="size-3.5 text-warning" aria-hidden />
+              <span className="mt-0.5 font-mono text-xs tabular-nums text-foreground">{alertCount}</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="left">{alertCount} active alert{alertCount === 1 ? '' : 's'}</TooltipContent>
+        </Tooltip>
+
+        {optimalPct !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex flex-col items-center" data-testid="inspector-collapsed-optimal">
+                <Sparkles className="size-3.5 text-positive" aria-hidden />
+                <span className="mt-0.5 font-mono text-[10px] tabular-nums text-foreground">{optimalPct}%</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="left">Optimal P(no-go): {optimalPct}%</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+
+      {/* Bottom hint */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="mx-auto mb-2 inline-flex size-6 items-center justify-center text-muted-foreground" aria-hidden>
+            <Info className="size-3" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="left">Live inspector</TooltipContent>
+      </Tooltip>
+    </aside>
   );
 }
 
@@ -234,39 +333,25 @@ function KpiGrid({ data }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {items.map(({ label, value, suffix, tone, Icon }) => (
-        <Tooltip key={label}>
-          <TooltipTrigger asChild>
-            <div className="rounded-md border border-border bg-background p-2.5 transition-colors hover:bg-muted/40">
-              <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
-                <Icon className="size-3" />
-                <span>{label}</span>
-              </div>
-              <div
-                className={cn(
-                  'mt-1 font-mono text-base tabular-nums',
-                  tone === 'danger' && 'text-danger',
-                  tone === 'warning' && 'text-warning',
-                  tone === 'positive' && 'text-positive',
-                  tone === 'foreground' && 'text-foreground',
-                )}
-              >
-                {value}
-                {suffix && <span className="ml-0.5 text-xs text-muted-foreground">{suffix}</span>}
-              </div>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="left">{label} ({locationLabel(tone)})</TooltipContent>
-        </Tooltip>
+        <div key={label} className="rounded-md border border-border bg-background p-2.5 transition-colors hover:bg-muted/40">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Icon className="size-3" />
+            <span>{label}</span>
+          </div>
+          <div
+            className={cn(
+              'mt-1 font-mono text-base tabular-nums',
+              tone === 'danger' && 'text-danger',
+              tone === 'warning' && 'text-warning',
+              tone === 'positive' && 'text-positive',
+              tone === 'foreground' && 'text-foreground',
+            )}
+          >
+            {value}
+            {suffix && <span className="ml-0.5 text-xs text-muted-foreground">{suffix}</span>}
+          </div>
+        </div>
       ))}
     </div>
   );
-}
-
-function locationLabel(tone) {
-  switch (tone) {
-    case 'danger': return 'threshold breach';
-    case 'warning': return 'monitor';
-    case 'positive': return 'within limit';
-    default: return 'live';
-  }
 }

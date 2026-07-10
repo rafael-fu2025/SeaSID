@@ -1,5 +1,72 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+/**
+ * streamChat — async generator that POSTs the user message to
+ * `/api/v1/agent/chat/stream` and yields each `{type, ...}` event
+ * emitted by the FastAPI `StreamingResponse` (SSE format).
+ *
+ * Each event arrives as `data: {json}\n\n`. We:
+ *  1. Read from the response body's `ReadableStream` chunk by chunk
+ *  2. Buffer partial lines until we see a blank line
+ *  3. Parse each `data:` line as JSON, ignoring any non-JSON heartbeats
+ *  4. Hand the parsed object to the caller's `for-await` loop
+ *
+ * `signal` lets the caller abort via `AbortController.abort()`; the
+ * fetch promise rejects and the generator unwinds cleanly.
+ */
+export async function* streamChat({ message, conversationId, siteKey, signal }) {
+  const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      site_key: siteKey,
+    }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    let detail = '';
+    try { detail = await res.text(); } catch {}
+    throw new Error(
+      `Backend error ${res.status}${detail ? ': ' + detail : ''}`,
+    );
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line.
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (!payload) continue;
+          try {
+            yield JSON.parse(payload);
+          } catch {
+            // Skip malformed lines instead of crashing the whole stream.
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const res = await fetch(url, {

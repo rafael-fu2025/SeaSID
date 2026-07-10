@@ -250,3 +250,194 @@ def _save_message(
             session.close()
     except Exception as exc:
         logger.warning("Failed to save agent message: %s", exc)
+
+
+# ── Streaming agent ────────────────────────────────────────────────────────
+
+async def chat_stream(
+    user_message: str,
+    conversation_id: str | None = None,
+    site_key: str | None = None,
+):
+    """
+    Streaming variant of `chat()` — yields dict events that the FastAPI
+    endpoint serialises as Server-Sent Events.
+
+    Event types:
+      - {type: "status",    conversation_id: str}
+      - {type: "text",      delta: str}
+      - {type: "tool_call", id, name, arguments}
+      - {type: "tool_result", id, name, output, durationMs}
+      - {type: "usage",     promptTokens, completionTokens, totalTokens}
+      - {type: "done",      finishReason, tool_calls: [...]}
+      - {type: "error",     message: str}
+    """
+    from __future__ import annotations
+    import time
+
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        yield {"type": "error", "message": "openai library not installed"}
+        return
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        yield {"type": "error", "message": "OPENAI_API_KEY not configured"}
+        return
+
+    model = os.getenv("OPENAI_MODEL", "MiniMax-M1").strip()
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+    if conversation_id is None:
+        conversation_id = str(uuid.uuid4())
+
+    yield {"type": "status", "conversation_id": conversation_id}
+
+    # Build messages
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    history = _load_history(conversation_id)
+    messages.extend(history)
+    if site_key:
+        user_message = f"[Context: site='{site_key}'] {user_message}"
+    messages.append({"role": "user", "content": user_message})
+    _save_message(conversation_id, "user", user_message, site_key=site_key)
+
+    tool_calls_log: list[dict] = []
+
+    for _round in range(MAX_TOOL_ROUNDS):
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+                temperature=0.3,
+                max_tokens=1024,
+                stream=True,
+            )
+        except Exception as exc:
+            logger.error("OpenAI streaming error: %s", exc)
+            yield {"type": "error", "message": str(exc)}
+            return
+
+        # Build tool calls incrementally across deltas.
+        # OpenAI's stream delivers each tool call's pieces in multiple chunks
+        # sharing the same `index`; we accumulate until finish_reason="tool_calls".
+        tool_calls_in_progress: dict[int, dict] = {}
+        finish_reason: str | None = None
+        full_content: str = ""
+        usage_payload: dict | None = None
+
+        async for chunk in response:
+            # `chunk.choices` can be empty on usage-only chunks
+            if not chunk.choices:
+                if getattr(chunk, "usage", None):
+                    usage_payload = {
+                        "promptTokens": chunk.usage.prompt_tokens,
+                        "completionTokens": chunk.usage.completion_tokens,
+                    }
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            # 1) text deltas
+            if delta and delta.content:
+                full_content += delta.content
+                yield {"type": "text", "delta": delta.content}
+
+            # 2) tool call deltas
+            if delta and delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tool_calls_in_progress:
+                        tool_calls_in_progress[idx] = {
+                            "id": tc_delta.id or "",
+                            "name": (tc_delta.function.name if tc_delta.function else "") or "",
+                            "arguments": (
+                                tc_delta.function.arguments
+                                if tc_delta.function and tc_delta.function.arguments
+                                else ""
+                            ),
+                        }
+                    else:
+                        if tc_delta.id:
+                            tool_calls_in_progress[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_in_progress[idx]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_in_progress[idx]["arguments"] += tc_delta.function.arguments
+
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+
+        # ── Decide what to do with the round's output ────────────────────
+        has_tool_calls = (
+            finish_reason == "tool_calls" and len(tool_calls_in_progress) > 0
+        )
+
+        if not has_tool_calls:
+            # Final answer this round.
+            if full_content:
+                _save_message(conversation_id, "assistant", full_content)
+            if usage_payload:
+                yield {"type": "usage", **usage_payload}
+            yield {
+                "type": "done",
+                "finishReason": finish_reason or "stop",
+                "tool_calls": tool_calls_log,
+            }
+            return
+
+        # Execute each tool call synchronously and emit tool_call + tool_result
+        # events for the frontend state machine to consume.
+        for _idx in sorted(tool_calls_in_progress.keys()):
+            tc = tool_calls_in_progress[_idx]
+            try:
+                func_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+            except json.JSONDecodeError:
+                func_args = {}
+
+            logger.info("Agent streaming tool call: %s(%s)", tc["name"], func_args)
+            yield {
+                "type": "tool_call",
+                "id": tc["id"],
+                "name": tc["name"],
+                "arguments": func_args,
+            }
+
+            t0 = time.monotonic()
+            handler = TOOL_HANDLERS.get(tc["name"])
+            if handler:
+                try:
+                    result = handler(func_args)
+                except Exception as exc:
+                    result = json.dumps({"error": str(exc)})
+            else:
+                result = json.dumps({"error": f"Unknown tool: {tc['name']}"})
+            duration_ms = int((time.monotonic() - t0) * 1000)
+
+            yield {
+                "type": "tool_result",
+                "id": tc["id"],
+                "name": tc["name"],
+                "output": result,
+                "durationMs": duration_ms,
+            }
+
+            tool_calls_log.append(
+                {"name": tc["name"], "arguments": func_args, "result": result}
+            )
+            messages.append(
+                {"role": "tool", "tool_call_id": tc["id"], "content": result}
+            )
+
+        # Loop continues for the next round.
+
+    yield {
+        "type": "error",
+        "message": "I gathered a lot of data but need to wrap up. Ask a more specific question.",
+    }
