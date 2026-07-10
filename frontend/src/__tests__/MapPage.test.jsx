@@ -9,7 +9,7 @@ import { api } from '../api';
 // surfaces the site list + skeleton + leaflet container.
 vi.mock('leaflet', () => ({
   default: {
-    map: () => ({ fitBounds: () => {}, remove: () => {}, on: () => {} }),
+    map: () => ({ fitBounds: () => {}, remove: () => {}, on: () => {}, invalidateSize: () => {} }),
     tileLayer: () => ({ addTo: () => {} }),
     layerGroup: () => ({ addTo: () => ({ clearLayers: () => {}, addTo: () => {} }), clearLayers: () => {} }),
     circle: () => ({ addTo: () => {} }),
