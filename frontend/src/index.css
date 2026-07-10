@@ -2054,22 +2054,28 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__footer {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Collapse / expand pill — only on full mode (≥ 1024 px).
-   ═══════════════════════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════════════════════════
+   The pill hovers *above* the sidebar's top edge, anchored to the
+   right side so it sits exactly on the boundary between the sidebar
+   and the main column. This matches the professional pattern used by
+   Linear / Notion / Vercel rather than tucking it next to the brand
+   mark. A subtle ring on hover makes the hit-area obvious without
+   increasing its visual weight. */
 
 .sidebar__collapse {
   position: absolute;
-  top: var(--space-5);
-  right: -13px;
-  width: 26px;
-  height: 26px;
+  top: -14px;                          /* floats above the brand row */
+  right: -13px;                         /* straddles the sidebar/main seam */
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--surface-1);
   border: 1px solid var(--border-strong);
   display: grid;
   place-items: center;
   cursor: pointer;
   color: var(--text-secondary);
-  z-index: 30;
+  z-index: 30;                          /* above main column */
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.04) inset,
     0 2px 8px rgba(0, 0, 0, 0.30);
@@ -2079,6 +2085,7 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__footer {
     color var(--transition-fast),
     box-shadow var(--transition-fast),
     border-color var(--transition-fast),
+    top var(--sidebar-anim),
     right var(--sidebar-anim);
 }
 
@@ -2094,11 +2101,12 @@ body[data-sidebar-mode="narrow"] .sidebar__collapse {
 }
 
 .sidebar__collapse:hover {
-  background: var(--surface-3);
+  background: var(--surface-2);
   color: var(--text-primary);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.06) inset,
-    0 6px 14px rgba(0, 0, 0, 0.40);
+    0 6px 14px rgba(0, 0, 0, 0.45);
+  transform: scale(1.05);
 }
 
 .sidebar__collapse:focus-visible {
@@ -2109,10 +2117,13 @@ body[data-sidebar-mode="narrow"] .sidebar__collapse {
 }
 
 body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__collapse {
-  transform: translateX(-2px);
+  /* The pill is absolutely positioned inside .sidebar, so `right: 14px`
+     remains anchored to the rail's right edge in both states — no
+     override needed when the sidebar narrows to 64 px. */
   background: var(--accent-soft);
   color: var(--accent);
   border-color: var(--accent-line);
+  transform: scale(1);
 }
 
 body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__collapse svg {

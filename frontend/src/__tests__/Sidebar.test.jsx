@@ -97,4 +97,21 @@ describe('Sidebar', () => {
     expect(css).toContain('body[data-sidebar-mode="narrow"]');
     expect(css).toContain('body[data-sidebar-mode="drawer"][data-sidebar-open="true"]');
   });
+
+  it('collapse pill hovers above the sidebar seam, not next to the brand', () => {
+    // The pill must NOT be tucked next to the brand row (top: 20px);
+    // it must float ABOVE the sidebar's top edge (top: < 0) so it
+    // sits on the seam between sidebar and main column.
+    const css = readFileSync(resolve(__dirname, '../index.css'), 'utf8');
+    const block = css.match(/\.sidebar__collapse\s*\{([\s\S]*?)\}/);
+    expect(block, '.sidebar__collapse rule not found in CSS').not.toBeNull();
+    const body = block[1];
+    // Negative top offset — pill floats above the sidebar's top edge.
+    expect(body).toMatch(/top:\s*-\d+px/);
+    // Slight negative right offset — pill straddles the seam, not fully
+    // inside the rail. The seam is the sidebar/main-content boundary.
+    expect(body).toMatch(/right:\s*-\d+px/);
+    // The pill must be raised above the main column's stacking context.
+    expect(body).toMatch(/z-index:\s*\d+/);
+  });
 });
