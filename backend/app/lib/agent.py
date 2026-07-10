@@ -272,7 +272,6 @@ async def chat_stream(
       - {type: "done",      finishReason, tool_calls: [...]}
       - {type: "error",     message: str}
     """
-    from __future__ import annotations
     import time
 
     try:
@@ -394,6 +393,28 @@ async def chat_stream(
 
         # Execute each tool call synchronously and emit tool_call + tool_result
         # events for the frontend state machine to consume.
+        # Build the consolidated assistant message (with the full tool_calls
+        # array) so the next request carries the model→assistant turn that
+        # the tool results will be replying to. Without this, MiniMax /
+        # OpenAI-style APIs reject the tool result with HTTP 400 / code 2013:
+        # "tool result's tool id(...) not found".
+        assistant_tool_calls = []
+        for _idx in sorted(tool_calls_in_progress.keys()):
+            tc = tool_calls_in_progress[_idx]
+            assistant_tool_calls.append({
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                },
+            })
+        messages.append({
+            "role": "assistant",
+            "content": full_content or None,
+            "tool_calls": assistant_tool_calls,
+        })
+
         for _idx in sorted(tool_calls_in_progress.keys()):
             tc = tool_calls_in_progress[_idx]
             try:
