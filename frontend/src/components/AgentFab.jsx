@@ -1,18 +1,43 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { api } from '../api';
-import { BrainIcon, SendIcon, RefreshIcon, XIcon } from './icons';
+import { useEffect, useRef, useState } from 'react';
+import { Bot, Send, RotateCcw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { api, streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
+import { Message } from './agent/Message';
+import { StreamingDots } from './agent/StreamingDots';
+import {
+  makeThinkingState, feedThinking, flushThinking,
+} from './agent/streaming-thinking';
 
 /**
- * AgentFab — Floating Action Button + popover chat for the SeaSID AI agent.
+ * newMessageId — small monotonic id generator for client-side message
+ * tracking. The server uses UUIDs; locally we just need a unique key.
+ */
+let _id = 0;
+function newMessageId() {
+  _id += 1;
+  return `m-${Date.now().toString(36)}-${_id}`;
+}
+
+/**
+ * AgentFab — floating AI assistant.
  *
- * Behavior:
- *  - Renders a circular pill FAB in the lower-right of every page.
- *  - Clicking the FAB toggles the popover; second click or outside-click closes it.
- *  - Popover is a 400 × 560 mini-chat that talks to POST /api/v1/agent/chat.
- *  - Site context is captured from the SiteContext (best-effort) or falls back
- *    to the first registered site.
- *  - Conversation ID is kept across open/close cycles; "reset" clears history.
+ *  - Anchored bottom-right as a single circular trigger.
+ *  - Opens a shadcn Sheet (side=right) on click.
+ *  - Sheet hosts a scrollable transcript and a sticky input row.
+ *  - Listens for `seasid:open-agent` (dispatched by CommandPalette)
+ *    so palette users can summon it without a click.
+ *  - Uses the same `/api/v1/agent/chat` contract as before, just
+ *    wrapped in a more polished container.
  */
 const PROMPTS = [
   'Should I dive at Dauin tomorrow morning?',
@@ -20,294 +45,329 @@ const PROMPTS = [
   'Generate a one-page safety briefing for Apo Island.',
 ];
 
-const fmtClock = (iso) =>
-  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
-export default function AgentFab() {
+function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [open, setOpen] = useState(false);
+  const [siteKey] = useState(initialSiteKey);
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState(null);
-  const [error, setError] = useState(null);
-  const [sites, setSites] = useState([]);
-  const [siteKey, setSiteKey] = useState('dauin_muck');
-  const transcriptRef = useRef(null);
-  const popoverRef = useRef(null);
-  const fabRef = useRef(null);
+  const scrollRef = useRef(null);
 
-  // Load sites once for the selector in the header.
+  // External trigger from CommandPalette
   useEffect(() => {
-    let cancel = false;
-    api.getSites()
-      .then((s) => {
-        if (cancel) return;
-        setSites(s || []);
-        if (s?.length && !s.find((x) => x.key === siteKey)) setSiteKey(s[0].key);
-      })
-      .catch(() => {});
-    return () => { cancel = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const handler = () => setOpen(true);
+    window.addEventListener('seasid:open-agent', handler);
+    return () => window.removeEventListener('seasid:open-agent', handler);
   }, []);
 
-  // Auto-scroll transcript on new message.
+  // Auto-scroll transcript on new content
   useEffect(() => {
-    if (!transcriptRef.current) return;
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [messages, loading]);
+    const node = scrollRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages, busy]);
 
-  // Close on Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => {
-      if (e.key === 'Escape') setOpen(false);
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    const userMsg = { id: newMessageId(), role: 'user', content: text };
+    const assistantMsg = {
+      id: newMessageId(),
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      toolCalls: [],
+      status: 'streaming',
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+    setMessages([...messages, userMsg, assistantMsg]);
+    setDraft('');
+    setBusy(true);
 
-  // Close on outside click (but not when clicking the FAB itself).
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e) => {
-      const inPopover = popoverRef.current?.contains(e.target);
-      const onFab = fabRef.current?.contains(e.target);
-      if (!inPopover && !onFab) setOpen(false);
+    const controller = new AbortController();
+    const think = makeThinkingState();
+
+    /**
+     * Helper: patch the assistant message in-place by id.
+     * `patch` is a Partial<UiMessage> or a function (prev) => Partial.
+     */
+    const patchAssistant = (patch) => {
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== assistantMsg.id) return m;
+        return typeof patch === 'function' ? { ...m, ...patch(m) } : { ...m, ...patch };
+      }));
     };
-    window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
-  }, [open]);
 
-  const send = useCallback(async (text) => {
-    const userMsg = (text ?? input).trim();
-    if (!userMsg || loading) return;
-    setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: userMsg, ts: new Date().toISOString() }]);
-    setLoading(true);
-    setError(null);
     try {
-      const result = await api.chat(userMsg, conversationId, siteKey);
-      setConversationId(result.conversation_id);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: result.response,
-          toolCalls: result.tool_calls,
-          ts: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      setError(err.message);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: '⚠️ ' + err.message,
-          ts: new Date().toISOString(),
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  }, [input, loading, conversationId, siteKey]);
+      for await (const ev of streamChat({
+        message: text,
+        conversationId,
+        siteKey,
+        signal: controller.signal,
+      })) {
+        switch (ev.type) {
+          case 'status':
+            if (ev.conversation_id) {
+              setConversationId((cur) => cur || ev.conversation_id);
+            }
+            break;
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    send();
+          case 'text': {
+            const split = feedThinking(think, ev.delta);
+            if (split.visible) {
+              patchAssistant((prev) => ({
+                content: (prev.content ?? '') + split.visible,
+              }));
+            }
+            if (split.thinking) {
+              patchAssistant((prev) => ({
+                thinking: (prev.thinking ?? '') + split.thinking,
+              }));
+            }
+            break;
+          }
+
+          case 'tool_call':
+            patchAssistant((prev) => ({
+              toolCalls: [
+                ...(prev.toolCalls ?? []),
+                {
+                  id: ev.id,
+                  name: ev.name,
+                  arguments: ev.arguments,
+                  status: 'running',
+                },
+              ],
+            }));
+            break;
+
+          case 'tool_result':
+            patchAssistant((prev) => ({
+              toolCalls: (prev.toolCalls ?? []).map((tc) =>
+                tc.id === ev.id
+                  ? {
+                      ...tc,
+                      status: ev.output?.startsWith?.('"error"') ? 'error' : 'complete',
+                      output: ev.output,
+                      durationMs: ev.durationMs,
+                    }
+                  : tc,
+              ),
+            }));
+            break;
+
+          case 'usage':
+            patchAssistant({
+              usage: {
+                promptTokens:     ev.promptTokens,
+                completionTokens: ev.completionTokens,
+                totalTokens:      ev.promptTokens + ev.completionTokens,
+              },
+            });
+            break;
+
+          case 'done':
+            // Flush any leftover buffer to the appropriate lane.
+            const tail = flushThinking(think);
+            if (tail.visible) {
+              patchAssistant((prev) => ({
+                content: (prev.content ?? '') + tail.visible,
+              }));
+            }
+            if (tail.thinking) {
+              patchAssistant((prev) => ({
+                thinking: (prev.thinking ?? '') + tail.thinking,
+              }));
+            }
+            patchAssistant({ status: 'done' });
+            break;
+
+          case 'error':
+            patchAssistant({
+              status: 'error',
+              content: (assistantMsg.content || '') + (ev.message ? '\n\n' + ev.message : ''),
+            });
+            break;
+        }
+      }
+    } catch (err) {
+      // AbortError is a normal cancellation, not a UI error.
+      if (err?.name === 'AbortError') {
+        patchAssistant({ status: 'done' });
+      } else {
+        patchAssistant({ status: 'error', content: err.message });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
   };
 
   const reset = () => {
     setMessages([]);
     setConversationId(null);
-    setError(null);
   };
 
   return (
-    <>
-      {open && (
-        <div
-          ref={popoverRef}
-          className="chat-popover"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="fab-chat-title"
-          data-testid="agent-popover"
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <button
+          type="button"
+          aria-label="Open AI agent"
+          data-testid="agent-fab"
+          className={cn(
+            'fixed bottom-12 right-4 z-40 flex size-12 items-center justify-center rounded-full',
+            'bg-reef text-reef-foreground shadow-lg ring-1 ring-foreground/10',
+            'transition-transform hover:scale-105 focus-visible:outline-none',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            open && 'rotate-12',
+          )}
         >
-          {/* Header */}
-          <header className="chat-popover__header">
-            <div className="chat-popover__title">
-              <div className="chat-popover__avatar" aria-hidden>
-                <BrainIcon size={16} />
-              </div>
-              <div>
-                <div id="fab-chat-title" className="chat-popover__title-text">SeaSID Agent</div>
-                <div className="chat-popover__sub">
-                  {sites.length > 0 ? (
-                    <select
-                      aria-label="Site context"
-                      value={siteKey}
-                      onChange={(e) => setSiteKey(e.target.value)}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-tertiary)',
-                        font: 'inherit',
-                        fontSize: 'var(--text-xs)',
-                        padding: 0,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {sites.map((s) => (
-                        <option key={s.key} value={s.key} style={{ color: 'var(--text-primary)', background: 'var(--surface-3)' }}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <>no site selected</>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="chat-popover__actions">
-              <button
-                className="chat-popover__iconbtn"
-                aria-label="Reset conversation"
-                onClick={reset}
-                disabled={!messages.length}
-                title="Reset conversation"
-              >
-                <RefreshIcon size={14} />
-              </button>
-              <button
-                className="chat-popover__iconbtn chat-popover__iconbtn--close"
-                aria-label="Close"
-                onClick={() => setOpen(false)}
-                title="Close (Esc)"
-              >
-                <XIcon size={14} />
-              </button>
-            </div>
-          </header>
+          <Bot className="size-5" />
+          <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_3px_var(--background)]" />
+        </button>
+      </SheetTrigger>
 
-          {/* Transcript */}
-          <div className="chat-popover__transcript" ref={transcriptRef}>
-            {messages.length === 0 ? (
-              <div className="chat-popover__empty">
-                <div className="chat-popover__empty-mark"><BrainIcon size={20} /></div>
-                <div className="chat-popover__empty-title">How can I help?</div>
-                <p>Ask about conditions, generate a briefing, or compare sites. Live data is fetched automatically.</p>
-                <div className="chat-popover__empty-prompts">
-                  {PROMPTS.map((p) => (
-                    <button
-                      key={p}
-                      className="chat-popover__empty-prompt"
-                      onClick={() => send(p)}
-                      data-testid={`prompt-${p.slice(0, 12).replace(/\s+/g, '-')}`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              messages.map((m, i) => <Bubble key={i} message={m} />)
-            )}
-            {loading && (
-              <div className="chat-popover__msg chat-popover__msg--assistant">
-                <div className="chat-popover__msg-avatar chat-popover__msg-avatar--assistant">
-                  <BrainIcon size={12} />
-                </div>
-                <div>
-                  <div className="chat-popover__bubble">
-                    <span className="chat-popover__typing">
-                      <span className="chat-popover__typing-dots">
-                        <span /><span /><span />
-                      </span>
-                      <span>Analyzing conditions…</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="flex h-full w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
+      >
+        <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-border bg-card px-5 py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {/* Square bot avatar w/ live-status pulse on the bottom-right
+                corner so the user can tell at a glance that the agent
+                is online. Sits flush with the header so the agent
+                profile reads "own" rather than "decorative". */}
+            <div
+              className="relative flex size-10 shrink-0 items-center justify-center bg-reef text-reef-foreground"
+              aria-hidden
+            >
+              <Bot className="size-5" />
+              <span
+                className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_2px_var(--card)]"
+                data-testid="agent-status-dot"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
+              <SheetDescription className="mt-0.5 text-xs leading-snug">
+                <span className="font-mono text-foreground">{siteKey}</span>
+                <span className="mx-1 text-muted-foreground/50">·</span>
+                7 tools · live briefing
+              </SheetDescription>
+            </div>
           </div>
 
-          {/* Composer */}
-          <form className="chat-popover__composer" onSubmit={handleSubmit}>
-            <textarea
-              className="chat-popover__input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder={`Ask about ${siteKey === 'dauin_muck' ? 'Dauin Muck' : 'Apo Reef'} conditions…`}
-              disabled={loading}
-              rows={1}
-              aria-label="Message"
-              data-testid="fab-chat-input"
-            />
-            <button
-              type="submit"
-              className="chat-popover__send"
-              disabled={loading || !input.trim()}
-              aria-label="Send message"
-              data-testid="fab-chat-send"
-            >
-              {loading ? <span className="spinner" style={{ borderTopColor: 'currentColor' }} /> : <SendIcon size={14} />}
-            </button>
-          </form>
-        </div>
-      )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0"
+                onClick={reset}
+                aria-label="Reset conversation"
+                data-testid="agent-reset"
+                disabled={messages.length === 0}
+              >
+                <RotateCcw className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset conversation</TooltipContent>
+          </Tooltip>
+        </SheetHeader>
 
-      {/* The actual floating button */}
-      <button
-        ref={fabRef}
-        type="button"
-        className="fab"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls="fab-chat"
-        aria-label={open ? 'Close agent chat' : 'Open agent chat'}
-        title={open ? 'Close agent chat' : 'SeaSID Agent'}
-        data-testid="agent-fab"
-      >
-        <span className="fab__icon" aria-hidden>
-          {open ? <XIcon size={18} /> : <BrainIcon size={18} />}
-        </span>
-        <span className="fab__dot" aria-hidden />
-        <span className="fab__label">{open ? 'Close' : 'Ask SeaSID'}</span>
-      </button>
-    </>
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto bg-background px-5 py-4"
+          data-testid="agent-transcript"
+        >
+          {messages.length === 0 && !busy ? (
+            <EmptyState siteKey={siteKey} />
+          ) : (
+            <div className="flex flex-col gap-3">
+              {messages.map((m, i) => (
+                <Message key={i} message={m} />
+              ))}
+              {busy && (
+                <div
+                  className="flex items-center gap-2 pl-1.5 text-xs text-muted-foreground"
+                  data-testid="agent-busy"
+                >
+                  <StreamingDots />
+                  <span>Agent thinking…</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border bg-card p-3">
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Ask about a site, conditions, alerts…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKey}
+              disabled={busy}
+              data-testid="agent-input"
+              className="flex-1"
+            />
+            <Button
+              onClick={send}
+              disabled={busy || draft.trim() === ''}
+              size="icon"
+              data-testid="agent-send"
+              aria-label="Send"
+            >
+              <Send className="size-4" />
+            </Button>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Enter to send · Shift+Enter for newline</span>
+            {conversationId && (
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {String(conversationId).slice(0, 8)}
+              </Badge>
+            )}
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
-function Bubble({ message }) {
-  const isUser = message.role === 'user';
+function EmptyState({ siteKey }) {
   return (
-    <div className={`chat-popover__msg chat-popover__msg--${message.role}`}>
-      <div className={`chat-popover__msg-avatar ${isUser ? '' : 'chat-popover__msg-avatar--assistant'}`}>
-        {isUser ? 'You' : <BrainIcon size={12} />}
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full bg-reef/10 text-reef">
+        <Bot className="size-5" />
       </div>
       <div>
-        <div className="chat-popover__bubble">
-          {isUser ? (
-            <span>{message.content}</span>
-          ) : (
-            <MarkdownResponse dense>{message.content}</MarkdownResponse>
-          )}
-        </div>
-        <div className="chat-popover__meta">
-          <span>{fmtClock(message.ts)}</span>
-          {message.toolCalls?.length > 0 && (
-            <span>tools: {message.toolCalls.map((t) => t.name).join(', ')}</span>
-          )}
-        </div>
+        <p className="text-sm font-medium text-foreground">No conversation yet</p>
+        <p className="mt-1 max-w-[260px] text-xs text-muted-foreground">
+          Ask for a briefing, conditions check, or run any of the 7 agent tools.
+          Site pinned to <span className="font-mono text-foreground">{siteKey}</span>.
+        </p>
+      </div>
+      <div className="grid gap-1.5 text-left text-xs">
+        {PROMPTS.map((p) => (
+          <span
+            key={p}
+            className="rounded-md border border-border bg-card px-2.5 py-1 text-muted-foreground"
+          >
+            {p}
+          </span>
+        ))}
       </div>
     </div>
   );
 }
+
+export default AgentFab;
+export { AgentFab };

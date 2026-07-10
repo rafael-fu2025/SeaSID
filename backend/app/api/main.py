@@ -25,6 +25,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from app.api.schemas import (
     AgentChatRequest,
@@ -55,7 +56,14 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 # Explicit allow-list — wildcard CORS was removed in v2.
 # Override via SEASID_ALLOWED_ORIGINS env var (comma-separated).
 import os as _os
-_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:3000"
+_DEFAULT_ORIGINS = (
+    "http://localhost:5173,http://localhost:5174,http://localhost:5175,"
+    "http://localhost:5176,http://localhost:5177,http://localhost:5178,"
+    "http://localhost:3000,http://localhost:8000,"
+    "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,"
+    "http://127.0.0.1:5176,http://127.0.0.1:5177,http://127.0.0.1:5178,"
+    "http://127.0.0.1:3000,http://127.0.0.1:8000"
+)
 ALLOWED_ORIGINS = [
     o.strip() for o in _os.getenv("SEASID_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
     if o.strip()
@@ -86,6 +94,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Chrome's CORS-RFC1918 (Private Network Access) preflight
+    # demands `Access-Control-Allow-Private-Network: true` when a
+    # public/external origin reaches a server on a private network.
+    # Localhost → localhost is normally exempt, but a stricter
+    # browser policy (or a tab in PNA-enforcing mode) can still
+    # block it. Set the flag so the preflight passes either way.
+    allow_private_network=True,
 )
 
 
@@ -268,6 +283,40 @@ async def agent_chat(request: AgentChatRequest):
     except Exception as exc:
         logger.error("Agent chat error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/v1/agent/chat/stream")
+async def agent_chat_stream(request: AgentChatRequest):
+    """Streaming variant — Server-Sent Events of {type, ...} events.
+
+    Event types (see `app.lib.agent.chat_stream` for the source of truth):
+      - {type: "status",      conversation_id: str}
+      - {type: "text",        delta: str}
+      - {type: "tool_call",   id, name, arguments}
+      - {type: "tool_result", id, name, output, durationMs}
+      - {type: "usage",       promptTokens, completionTokens}
+      - {type: "done",        finishReason, tool_calls}
+      - {type: "error",       message}
+    """
+    from app.lib.agent import chat_stream
+
+    async def event_generator():
+        async for event in chat_stream(
+            user_message=request.message,
+            conversation_id=request.conversation_id,
+            site_key=request.site_key,
+        ):
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/api/v1/agent/briefing", response_model=BriefingResponse)

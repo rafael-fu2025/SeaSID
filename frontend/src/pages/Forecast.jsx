@@ -1,171 +1,253 @@
-import { useState, useEffect } from 'react';
-import { api } from '../api';
-import Dropdown from '../components/Dropdown';
-import PBadChart from '../components/PBadChart';
-import ForecastCard from '../components/ForecastCard';
-import { RiskBadge } from '../components/RiskBadge';
-import { SkeletonChart, SkeletonForecastGrid } from '../components/Skeleton';
-import MarkdownResponse from '../components/MarkdownResponse';
-import { RefreshIcon, AlertIcon } from '../components/icons';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw, AlertTriangle, Sparkles, Activity } from 'lucide-react';
+import { api } from '@/api';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton, SkeletonChart } from '@/components/Skeleton';
+import { PBadChart } from '@/components/PBadChart';
+import { RiskBadge } from '@/components/RiskBadge';
+import { SiteSelector } from '@/components/SiteSelector';
+import MarkdownResponse from '@/components/MarkdownResponse';
 
 const METRIC_DEFS = [
-  { key: 'precip_24h_mm',   label: 'Precip · 24h', unit: 'mm' },
-  { key: 'precip_recent_3h', label: 'Precip · last 3h', unit: 'mm' },
-  { key: 'wind_max_kmh',    label: 'Wind max', unit: 'km/h' },
-  { key: 'wave_max_m',      label: 'Wave max', unit: 'm' },
-  { key: 'sea_temp_c',      label: 'Sea temp', unit: '°C' },
-  { key: 'tide_range_m',    label: 'Tide range', unit: 'm' },
+  { key: 'precip_24h_mm',    label: 'Precip · 24h',  unit: 'mm' },
+  { key: 'precip_recent_3h', label: 'Precip · 3h',   unit: 'mm' },
+  { key: 'wind_max_kmh',     label: 'Wind max',      unit: 'km/h' },
+  { key: 'wave_max_m',       label: 'Wave max',      unit: 'm' },
+  { key: 'sea_temp_c',       label: 'Sea temp',      unit: '°C' },
+  { key: 'tide_range_m',     label: 'Tide range',    unit: 'm' },
 ];
 
-const fmt = (v, unit) =>
-  v == null ? '—' : `${Number(v).toFixed(unit === 'm' || unit === '°C' ? 1 : 0)}${unit ? ' ' + unit : ''}`;
+const fmt = (v, unit) => {
+  if (v == null) return '—';
+  const decimals = unit === 'm' || unit === '°C' ? 1 : 0;
+  return `${Number(v).toFixed(decimals)}${unit ? ' ' + unit : ''}`;
+};
 
+/**
+ * Forecast — AI briefing + live feature snapshot for the next 48h.
+ *
+ *  - Site selector + refresh button in the header.
+ *  - Two-column layout: briefing (MarkdownResponse) on the left,
+ *    live feature snapshot + overall risk on the right.
+ *  - Bottom strip: P(no-go) chart over the next 12 hours (so the
+ *    optimal-window marker from the briefing aligns visually with
+ *    the Dashboard's chart).
+ *  - Listens for the global "seasid:refresh" event.
+ */
 export default function Forecast() {
-  const [sites, setSites] = useState([]);
-  const [siteOptions, setSiteOptions] = useState([]);
   const [selectedSite, setSelectedSite] = useState('dauin_muck');
   const [briefing, setBriefing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const cancelRef = useRef(false);
 
-  useEffect(() => {
-    api.getSites()
-      .then((s) => {
-        setSites(s || []);
-        setSiteOptions((s || []).map((site) => ({
-          value: site.key,
-          label: site.name,
-          description: site.type,
-        })));
-      })
-      .catch(console.error);
+  const load = useCallback(async (siteKey) => {
+    cancelRef.current = false;
+    setError(null);
+    try {
+      const b = await api.getBriefing(siteKey);
+      if (!cancelRef.current) setBriefing(b);
+    } catch (err) {
+      if (!cancelRef.current) setError(err.message);
+    } finally {
+      if (!cancelRef.current) setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    let cancel = false;
     setLoading(true);
-    setError(null);
-    api.getBriefing(selectedSite)
-      .then((b) => !cancel && setBriefing(b))
-      .catch((err) => !cancel && setError(err.message))
-      .finally(() => !cancel && setLoading(false));
-    return () => { cancel = true; };
-  }, [selectedSite]);
+    load(selectedSite);
+    return () => { cancelRef.current = true; };
+  }, [selectedSite, load]);
+
+  useEffect(() => {
+    const handler = () => {
+      setRefreshing(true);
+      load(selectedSite).finally(() => setRefreshing(false));
+    };
+    window.addEventListener('seasid:refresh', handler);
+    return () => window.removeEventListener('seasid:refresh', handler);
+  }, [selectedSite, load]);
 
   const refresh = () => {
-    setLoading(true);
-    api.getBriefing(selectedSite).then(setBriefing).finally(() => setLoading(false));
+    setRefreshing(true);
+    load(selectedSite).finally(() => setRefreshing(false));
   };
 
+  const fc = briefing?.tool_calls?.find((t) => t.name === 'get_forecast');
+  const wt = briefing?.tool_calls?.find((t) => t.name === 'get_weather');
+  const parsed = parseForecast(fc);
+  const optimal = parsed.optimal_window;
+  const next12 = (parsed.hours || []).slice(0, 12);
+
   return (
-    <div>
-      <header className="page-header">
+    <div className="flex flex-col gap-6 p-6 lg:p-8">
+      {/* Header */}
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="page-title">Forecast</h1>
-          <p className="page-subtitle">AI briefing and feature snapshot for the next 48 hours</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Forecast
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            AI briefing and feature snapshot for the next 48 hours.
+          </p>
         </div>
-        <div className="flex gap-3" style={{ minWidth: 360 }}>
-          {siteOptions.length > 0 && (
-            <div style={{ flex: 1 }}>
-              <Dropdown
-                id="forecast-site"
-                ariaLabel="Select dive site"
-                value={selectedSite}
-                onChange={setSelectedSite}
-                options={siteOptions}
-                placeholder="Select site"
-              />
-            </div>
-          )}
-          <button className="btn btn--secondary" onClick={refresh} disabled={loading}>
-            {loading ? <span className="spinner" /> : <RefreshIcon size={14} />}
+        <div className="flex items-center gap-2 lg:min-w-[360px]">
+          <SiteSelector
+            value={selectedSite}
+            onChange={setSelectedSite}
+            className="flex-1"
+            id="forecast-site"
+          />
+          <Button
+            variant="secondary"
+            onClick={refresh}
+            disabled={refreshing}
+            data-testid="forecast-refresh"
+          >
+            {refreshing ? (
+              <Skeleton className="size-3.5 rounded-full" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
             <span>Refresh</span>
-          </button>
+          </Button>
         </div>
       </header>
 
+      {/* Error */}
       {error && (
-        <div className="banner banner--danger">
-          <span className="banner__icon"><AlertIcon size={16} /></span>
-          <div>
-            <div className="banner__title">Briefing unavailable</div>
-            <div className="banner__body">{error}</div>
-          </div>
-        </div>
+        <Card className="border-danger/30 bg-danger/5">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertTriangle className="mt-0.5 size-4 text-danger" />
+            <div className="text-sm">
+              <p className="font-medium text-danger">Briefing unavailable</p>
+              <p className="mt-1 text-xs text-muted-foreground">{error}</p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
+      {/* Loading */}
       {loading && !briefing ? (
-        <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
+        <div className="flex flex-col gap-6">
           <SkeletonChart />
-          <SkeletonForecastGrid />
+          <SkeletonChart />
         </div>
       ) : (
-        <div className="grid-12" style={{ marginTop: 'var(--space-5)' }}>
-          <section className="span-7 section">
-            <div className="section__head">
-              <div>
-                <h2 className="section__title">Briefing</h2>
-                <p className="section__sub">Generated by the SeaSID agent with live weather, tide, and model output</p>
-              </div>
-            </div>
-            <div className="section__body">
-              {briefing ? (
-                <MarkdownResponse>{briefing.response || ''}</MarkdownResponse>
-              ) : (
-                <div className="empty">No briefing returned.</div>
-              )}
-            </div>
-          </section>
+        <>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+            {/* Briefing */}
+            <Card className="gap-3 lg:col-span-3">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-4 text-reef" />
+                  <CardTitle className="text-base">Briefing</CardTitle>
+                </div>
+                <CardDescription>
+                  Generated by the SeaSID agent with live weather, tide, and model output.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {briefing?.response ? (
+                  <MarkdownResponse>{briefing.response}</MarkdownResponse>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No briefing returned.</p>
+                )}
+                {briefing?.tool_calls && briefing.tool_calls.length > 0 && (
+                  <div className="mt-4 border-t border-border pt-3">
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      Tools called ({briefing.tool_calls.length})
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {briefing.tool_calls.map((t, i) => (
+                        <Badge
+                          key={i}
+                          variant="secondary"
+                          className="font-mono text-[10px]"
+                        >
+                          {t.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
-          <aside className="span-5 section">
-            <div className="section__head">
-              <div>
-                <h2 className="section__title">Live features</h2>
-                <p className="section__sub">11-feature snapshot for the current hour</p>
-              </div>
-            </div>
-            <div className="section__body">
-              {briefing && briefing.tool_calls ? (
-                <FeatureSnapshot toolCalls={briefing.tool_calls} />
-              ) : (
-                <div className="empty">No feature snapshot yet.</div>
-              )}
-            </div>
-          </aside>
-        </div>
+            {/* Live features */}
+            <Card className="gap-3 lg:col-span-2">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Activity className="size-4 text-reef" />
+                  <CardTitle className="text-base">Live features</CardTitle>
+                </div>
+                <CardDescription>
+                  Snapshot of the 11-feature vector for the current hour.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FeatureSnapshot parsed={parsed} weatherToolCall={wt} />
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Overall risk
+                  </p>
+                  <div className="mt-2">
+                    <RiskBadge risk={parsed.overall_risk || 'unknown'} />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {next12.length > 0 && (
+            <PBadChart hours={next12} optimalIso={optimal?.ts} />
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function FeatureSnapshot({ toolCalls }) {
-  const fc = toolCalls.find((t) => t.name === 'get_forecast');
-  const wt = toolCalls.find((t) => t.name === 'get_weather');
-
-  if (!fc) return <div className="empty">No data</div>;
-
-  let parsed = {};
-  try { parsed = JSON.parse(fc.result || '{}'); } catch {}
+function FeatureSnapshot({ parsed, weatherToolCall }) {
+  if (!parsed || Object.keys(parsed).length === 0) {
+    return <p className="text-sm text-muted-foreground">No feature snapshot yet.</p>;
+  }
 
   return (
-    <dl className="deflist">
+    <dl className="divide-y divide-border">
       {METRIC_DEFS.map((m) => {
-        const v = parsed.features?.[m.key] ?? wt ? extract(wt, m.key) : null;
+        const v =
+          parsed.features?.[m.key] ??
+          extractFromWeather(weatherToolCall, m.key);
         return (
-          <div key={m.key} style={{ display: 'contents' }}>
-            <dt>{m.label}</dt>
-            <dd>{fmt(v, m.unit)}</dd>
+          <div key={m.key} className="flex items-center justify-between py-2 text-sm">
+            <dt className="text-muted-foreground">{m.label}</dt>
+            <dd className="font-mono tabular-nums text-foreground">{fmt(v, m.unit)}</dd>
           </div>
         );
       })}
-      <div style={{ display: 'contents' }}>
-        <dt>Overall risk</dt>
-        <dd><RiskBadge risk={parsed.overall_risk || '—'} /></dd>
-      </div>
     </dl>
   );
 }
 
-function extract(toolCall, key) {
-  try { return JSON.parse(toolCall.result || '{}')?.weather?.[key]; } catch { return null; }
+function parseForecast(toolCall) {
+  if (!toolCall) return {};
+  try {
+    return JSON.parse(toolCall.result || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function extractFromWeather(toolCall, key) {
+  if (!toolCall) return null;
+  try {
+    return JSON.parse(toolCall.result || '{}')?.weather?.[key];
+  } catch {
+    return null;
+  }
 }

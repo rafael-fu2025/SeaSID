@@ -1,0 +1,127 @@
+import { Bot, AlertTriangle, User } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import MarkdownResponse from '@/components/MarkdownResponse';
+import { ToolCallGroup } from './ToolCallGroup';
+import { ThinkingBlock } from './ThinkingBlock';
+import { StreamingDots } from './StreamingDots';
+
+/**
+ * Message — single bubble in the agent transcript.
+ *
+ * Composition matches the user's reference (minimax_cb's
+ * `<ChatMessage>`):
+ *   1. Header (sender avatar + name + optional meta badge)
+ *   2. Tool calls (`<ToolCallGroup>` collapses 1+ call into a card lane)
+ *   3. Thinking (`<ThinkingBlock>` — collapsible, default closed)
+ *   4. Body (the assistant's actual answer, rendered as Markdown)
+ *   5. Streaming indicator (`<StreamingDots>`) when the answer is
+ *      in flight but the first delta hasn't arrived yet
+ *
+ * Variants:
+ *   - `role: "user"`      → right-aligned-ish, neutral card
+ *   - `role: "assistant"` → left-aligned, reef-tinted card
+ *   - `role: "error"`     → danger-tinted, no markdown
+ */
+export function Message({ message }) {
+  if (!message) return null;
+  const role = message.role ?? 'assistant';
+  if (role === 'user')   return <UserMessage message={message} />;
+  if (role === 'error')  return <ErrorMessage message={message} />;
+  return <AssistantMessage message={message} />;
+}
+
+function UserMessage({ message }) {
+  return (
+    <div
+      className="flex flex-col items-end gap-1"
+      data-testid="message-user"
+    >
+      <header className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span>You</span>
+        <User className="size-3" />
+      </header>
+      <div className="max-w-[88%] whitespace-pre-wrap break-words border border-border bg-card p-2.5 text-sm text-foreground">
+        {message.content}
+      </div>
+    </div>
+  );
+}
+
+function AssistantMessage({ message }) {
+  const isStreaming = message.status === 'streaming';
+  const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+  const hasThinking  = typeof message.thinking === 'string' && message.thinking.trim().length > 0;
+  const hasContent   = typeof message.content  === 'string' && message.content.length > 0;
+  const showDotsOnly = isStreaming && !hasContent && !hasToolCalls;
+
+  return (
+    <div
+      className="flex flex-col items-start gap-1"
+      data-testid="message-assistant"
+      data-streaming={isStreaming}
+    >
+      <header className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-reef">
+        <div className="flex size-4 items-center justify-center bg-reef text-reef-foreground">
+          <Bot className="size-2.5" />
+        </div>
+        <span className="font-medium">Agent</span>
+        {hasToolCalls && (
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            · {message.toolCalls.length} tool{message.toolCalls.length === 1 ? '' : 's'}
+          </span>
+        )}
+        {message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0 && (
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground" data-testid="message-toolcount-legacy">
+            (legacy: {message.tool_calls.length})
+          </span>
+        )}
+      </header>
+
+      {hasToolCalls && (
+        <div className="w-full max-w-full">
+          <ToolCallGroup calls={message.toolCalls} />
+        </div>
+      )}
+
+      {hasThinking && (
+        <div className="w-full max-w-full">
+          <ThinkingBlock>{message.thinking}</ThinkingBlock>
+        </div>
+      )}
+
+      <div
+        className={cn(
+          'max-w-[88%] border bg-reef/5 p-3 text-sm text-foreground',
+          'border-reef/30',
+        )}
+        data-testid="message-assistant-body"
+      >
+        {showDotsOnly ? (
+          <div className="py-1.5">
+            <StreamingDots />
+          </div>
+        ) : (
+          <MarkdownResponse>{message.content ?? ''}</MarkdownResponse>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ErrorMessage({ message }) {
+  return (
+    <div
+      className="flex flex-col items-start gap-1"
+      data-testid="message-error"
+      role="alert"
+    >
+      <header className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-danger">
+        <AlertTriangle className="size-3" />
+        <span>Error</span>
+      </header>
+      <div className="max-w-[88%] border border-danger/30 bg-danger/10 p-2.5 text-sm text-danger">
+        {message.content ?? 'Something went wrong.'}
+      </div>
+    </div>
+  );
+}

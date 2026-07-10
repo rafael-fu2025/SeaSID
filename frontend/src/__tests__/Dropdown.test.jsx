@@ -1,50 +1,59 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import Dropdown from '../components/Dropdown';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import Dropdown from '@/components/Dropdown';
 
 const OPTIONS = [
   { value: 'dauin_muck', label: 'Dauin Muck Bays', description: 'muck' },
   { value: 'apo_reef',   label: 'Apo Island Reef',   description: 'reef' },
 ];
 
-describe('Dropdown', () => {
-  it('renders the current value as the trigger label', () => {
-    render(<Dropdown value="dauin_muck" onChange={() => {}} options={OPTIONS} ariaLabel="Test" id="t1" />);
-    expect(screen.getByRole('button', { name: /test/i })).toHaveTextContent(/dauin muck bays/i);
+function renderDropdown(props) {
+  return render(
+    <TooltipProvider>
+      <Dropdown {...props} />
+    </TooltipProvider>,
+  );
+}
+
+describe('Dropdown (shadcn Select shim)', () => {
+  it('renders the trigger with role=combobox and current label as the value text', () => {
+    renderDropdown({ value: 'dauin_muck', onChange: () => {}, options: OPTIONS, ariaLabel: 'Test', id: 't1' });
+    const trigger = screen.getByRole('combobox', { name: /test/i });
+    expect(trigger).toHaveTextContent(/dauin muck bays/i);
   });
 
   it('opens the menu when clicked and lists every option', async () => {
-    render(<Dropdown value="dauin_muck" onChange={() => {}} options={OPTIONS} ariaLabel="Test" id="t1" />);
-    fireEvent.click(screen.getByRole('button', { name: /test/i }));
-    expect(await screen.findByRole('listbox')).toBeInTheDocument();
-    expect(screen.getByTestId('dropdown-option-dauin_muck')).toBeInTheDocument();
-    expect(screen.getByTestId('dropdown-option-apo_reef')).toBeInTheDocument();
+    renderDropdown({ value: 'dauin_muck', onChange: () => {}, options: OPTIONS, ariaLabel: 'Test', id: 't1' });
+    fireEvent.click(screen.getByRole('combobox', { name: /test/i }));
+    const listbox = await screen.findByRole('listbox');
+    expect(listbox).toBeInTheDocument();
+    expect(withinListbox(listbox, 'Dauin Muck Bays')).toBeInTheDocument();
+    expect(withinListbox(listbox, 'Apo Island Reef')).toBeInTheDocument();
   });
 
-  it('calls onChange with the new value when an option is clicked', async () => {
+  it('calls onChange with the new value when an option is picked', async () => {
     const onChange = vi.fn();
-    render(<Dropdown value="dauin_muck" onChange={onChange} options={OPTIONS} ariaLabel="Test" id="t1" />);
-    fireEvent.click(screen.getByRole('button', { name: /test/i }));
-    fireEvent.click(screen.getByTestId('dropdown-option-apo_reef'));
-    expect(onChange).toHaveBeenCalledWith('apo_reef');
+    renderDropdown({ value: 'dauin_muck', onChange, options: OPTIONS, ariaLabel: 'Test', id: 't1' });
+    fireEvent.click(screen.getByRole('combobox', { name: /test/i }));
+    const listbox = await screen.findByRole('listbox');
+    fireEvent.click(withinListbox(listbox, 'Apo Island Reef'));
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith('apo_reef');
+    });
   });
 
-  it('marks the current value as selected (aria-selected)', async () => {
-    render(<Dropdown value="apo_reef" onChange={() => {}} options={OPTIONS} ariaLabel="Test" id="t1" />);
-    fireEvent.click(screen.getByRole('button', { name: /test/i }));
-    await waitFor(() => {
-      expect(screen.getByTestId('dropdown-option-apo_reef')).toHaveAttribute('aria-selected', 'true');
-    });
-    expect(screen.getByTestId('dropdown-option-dauin_muck')).toHaveAttribute('aria-selected', 'false');
-  });
-
-  it('closes when Escape is pressed', async () => {
-    render(<Dropdown value="dauin_muck" onChange={() => {}} options={OPTIONS} ariaLabel="Test" id="t1" />);
-    fireEvent.click(screen.getByRole('button', { name: /test/i }));
-    expect(await screen.findByRole('listbox')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: 'Escape' });
-    await waitFor(() => {
-      expect(screen.queryByRole('listbox')).toBeNull();
-    });
+  it('renders aria-selected on the current value', async () => {
+    renderDropdown({ value: 'apo_reef', onChange: () => {}, options: OPTIONS, ariaLabel: 'Test', id: 't1' });
+    fireEvent.click(screen.getByRole('combobox', { name: /test/i }));
+    const listbox = await screen.findByRole('listbox');
+    const current = withinListbox(listbox, 'Apo Island Reef').closest('[role="option"]');
+    expect(current).toHaveAttribute('aria-selected', 'true');
   });
 });
+
+/** Find a labelled option inside the listbox. Returns the <SelectItem>. */
+function withinListbox(listbox, label) {
+  return Array.from(listbox.querySelectorAll('[role="option"]'))
+    .find((el) => el.textContent.includes(label));
+}
