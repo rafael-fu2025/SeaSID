@@ -7,7 +7,7 @@ import { SidebarProvider } from '../theme/SidebarContext';
 import { api } from '../api';
 
 vi.mock('../api', () => ({
-  api: { getSites: vi.fn() },
+  api: { getSites: vi.fn(), health: vi.fn() },
 }));
 
 const safeStorage = () => {
@@ -31,6 +31,16 @@ beforeEach(() => {
     { key: 'dauin_muck', name: 'Dauin Muck Bays', type: 'muck' },
     { key: 'apo_reef',   name: 'Apo Island Reef',   type: 'reef' },
   ]);
+  api.health.mockResolvedValue({
+    status: 'ok',
+    version: '2.1.0',
+    model_loaded: 'lstm',
+    db_tables: 8,
+    providers: {
+      weather: 'open_meteo',
+      marine: 'open_meteo',
+    },
+  });
 });
 
 function renderSettings() {
@@ -51,14 +61,46 @@ describe('Settings page', () => {
     expect(screen.getByTestId('settings-tools')).toBeInTheDocument();
   });
 
-  it('renders the tools table with all six entries', () => {
+  it('renders the tools table with all seven entries (v2.1)', () => {
     renderSettings();
     const table = screen.getByTestId('tools-table');
     expect(table).toBeInTheDocument();
-    ['get_forecast', 'get_weather', 'list_sites', 'get_model_info', 'get_history', 'check_alerts']
-      .forEach((name) => {
-        expect(table.textContent).toContain(name);
-      });
+    [
+      'get_forecast', 'get_weather', 'list_sites',
+      'get_model_info', 'get_history', 'check_alerts',
+      'get_air_quality',
+    ].forEach((name) => {
+      expect(table.textContent).toContain(name);
+    });
+  });
+
+  it('surfaces live data-source providers from /api/v1/health', async () => {
+    api.health.mockResolvedValueOnce({
+      status: 'ok', version: '2.1.0', model_loaded: 'lstm', db_tables: 8,
+      providers: { weather: 'open_meteo', marine: 'stormglass', air: 'aqicn' },
+    });
+    renderSettings();
+    expect(await screen.findByTestId('settings-providers')).toBeInTheDocument();
+    // The provider name is shown in the card's coords line; the status
+    // line says "Default" or "Custom" depending on the role.
+    expect(screen.getByTestId('provider-status-weather').textContent).toMatch(/default/i);
+    expect(screen.getByTestId('provider-status-marine').textContent).toMatch(/custom/i);
+    expect(screen.getByTestId('provider-status-air').textContent).toMatch(/custom/i);
+    // The custom provider name appears in the card's coords line.
+    const cards = screen.getAllByTestId('settings-providers')[0].querySelectorAll('.map-site-card');
+    expect(cards[0].textContent).toContain('open_meteo');
+    expect(cards[1].textContent).toContain('stormglass');
+    expect(cards[2].textContent).toContain('aqicn');
+  });
+
+  it('shows the air provider as not-configured when omitted from health', async () => {
+    api.health.mockResolvedValueOnce({
+      status: 'ok', version: '2.1.0', model_loaded: 'lstm', db_tables: 8,
+      providers: { weather: 'open_meteo', marine: 'open_meteo' },
+    });
+    renderSettings();
+    expect(await screen.findByTestId('settings-providers')).toBeInTheDocument();
+    expect(screen.getByTestId('provider-status-air').textContent).toMatch(/not configured/i);
   });
 
   it('shows Light / Dark toggle, defaulting to dark', () => {

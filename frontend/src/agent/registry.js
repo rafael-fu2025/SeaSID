@@ -12,7 +12,7 @@ export const AGENT_TOOLS = [
   {
     name: 'get_forecast',
     description:
-      'Returns the current dive-condition forecast and risk assessment for a specific site (visibility, current, overall risk, P(no-go), 11-feature snapshot).',
+      'Returns the current dive-condition forecast and risk assessment for a specific site (visibility, current, overall risk, P(no-go), 14-feature snapshot, optional air-quality block).',
     params: [
       { name: 'site_key', type: 'string', required: true, description: 'Site identifier (dauin_muck | apo_reef).' },
     ],
@@ -48,5 +48,13 @@ export const AGENT_TOOLS = [
     description:
       'Returns recent alerts (last 24 hours) for a site — kind, message, channel (in-app or email).',
     params: [{ name: 'site_key', type: 'string', required: true, description: 'Site identifier.' }],
+  },
+  {
+    name: 'get_air_quality',
+    description:
+      'Returns the most recent air-quality snapshot for a site (AQI, PM2.5, PM10, O3, NO2) sourced from AQICN. Returns available=false when the site is opted out (no nearby station).',
+    params: [
+      { name: 'site_key', type: 'string', required: true, description: 'Site identifier.' },
+    ],
   },
 ];

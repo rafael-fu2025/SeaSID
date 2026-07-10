@@ -173,3 +173,7 @@ class HealthResponse(BaseModel):
     version: str
     model_loaded: str
     db_tables: int
+    # v2.1 — names of the providers currently active in the registry,
+    # keyed by role (weather / marine / air). The Settings page renders
+    # this so operators can see which third-party data sources are live.
+    providers: dict[str, str] = {}

@@ -96,6 +96,7 @@ def health():
     """Health check endpoint."""
     from app.lib.model import load_best, get_model_type
     from app.lib.db import Base, engine
+    from app.lib.providers import active_providers
     from sqlalchemy import inspect
 
     bundle = load_best()
@@ -104,11 +105,19 @@ def health():
     inspector = inspect(engine)
     tables = inspector.get_table_names()
 
+    # Surface which providers are active so the Settings page can show
+    # operators what's live without round-tripping the registry itself.
+    providers = {
+        role: info.name
+        for role, info in active_providers().items()
+    }
+
     return HealthResponse(
         status="ok",
         version="1.0.0",
         model_loaded=model_type,
         db_tables=len(tables),
+        providers=providers,
     )
 
 

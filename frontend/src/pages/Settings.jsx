@@ -89,6 +89,9 @@ export default function Settings() {
         </div>
       </header>
 
+      {/* ── 0. Data sources (live) ────────────────────────────────────────── */}
+      <ProviderStatus />
+
       {/* ── 1. Appearance ───────────────────────────────────────────────── */}
       <section className="section" data-testid="settings-appearance">
         <div className="section__head">
@@ -254,5 +257,75 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * ProviderStatus — small section that shows which third-party data
+ * providers are currently active in the backend, surfaced through
+ * /api/v1/health. Operators rely on this to confirm that AQICN_API_KEY
+ * and STORMGLASS_API_KEY are wired up correctly.
+ *
+ * "Weather" and "Marine" are always populated (Open-Meteo defaults).
+ * "Air" only appears when SEASID_PROVIDER_AIR is set to a real provider
+ * — usually `aqicn`.
+ */
+function ProviderStatus() {
+  const [providers, setProviders] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    api.health()
+      .then((h) => { if (!cancel) { setProviders(h.providers || {}); setLoaded(true); } })
+      .catch(() => { if (!cancel) setLoaded(true); });
+    return () => { cancel = true; };
+  }, []);
+
+  const ROLES = [
+    { role: 'weather', label: 'Weather',  defaultName: 'open_meteo' },
+    { role: 'marine',  label: 'Marine',   defaultName: 'open_meteo' },
+    { role: 'air',     label: 'Air',      defaultName: 'off' },
+  ];
+
+  return (
+    <section className="section" data-testid="settings-providers">
+      <div className="section__head">
+        <h2 className="section__title">Data sources</h2>
+        <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
+          Live providers reported by <code>/api/v1/health</code>
+        </span>
+      </div>
+      <div className="section__body">
+        {!loaded ? (
+          <div className="muted" style={{ fontSize: 'var(--text-sm)' }}>Loading…</div>
+        ) : (
+          <div className="map-site-list">
+            {ROLES.map(({ role, label, defaultName }) => {
+              const name = providers?.[role] ?? defaultName;
+              const isDefault = name === defaultName;
+              const isOptional = role === 'air' && name === 'off';
+              return (
+                <div className="map-site-card" key={role}>
+                  <div className="map-site-card__name">{label}</div>
+                  <div className="map-site-card__coords">{name}</div>
+                  <div
+                    className="muted"
+                    style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}
+                    data-testid={`provider-status-${role}`}
+                  >
+                    {isOptional
+                      ? 'Not configured — set AQICN_API_KEY to enable.'
+                      : isDefault
+                        ? 'Default provider, no key required.'
+                        : 'Custom provider active.'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

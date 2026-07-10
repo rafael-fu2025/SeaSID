@@ -132,6 +132,10 @@ export default function MapPage() {
       }).addTo(group);
 
       const marker = L.marker([site.lat, site.lon]);
+      const air = fc?.air;
+      const airLine = air?.available
+        ? `<div class="map-popup__row"><span>Air (AQI)</span><strong>${Math.round(air.aqi)} · ${escapeHtml(air.station_name ?? '—')}</strong></div>`
+        : '';
       const popupHtml = `
         <div class="map-popup">
           <p class="map-popup__title">${escapeHtml(site.name)}</p>
@@ -139,6 +143,7 @@ export default function MapPage() {
           <div class="map-popup__row"><span>P(no-go)</span><strong>${p == null ? '—' : Math.round(p * 100) + '%'}</strong></div>
           <div class="map-popup__row"><span>Visibility</span><strong>${escapeHtml(cur?.viz_label ?? '—')}</strong></div>
           <div class="map-popup__row"><span>Current</span><strong>${escapeHtml(cur?.current_risk ?? '—')}</strong></div>
+          ${airLine}
           <div class="map-popup__row"><span>Coords</span><strong>${fmt(site.lat)}, ${fmt(site.lon)}</strong></div>
         </div>
       `;
@@ -158,6 +163,10 @@ export default function MapPage() {
         const cur = fc?.hours?.[0];
         const p = cur?.p_bad ?? null;
         const level = riskLevel(p);
+        const air = fc?.air;
+        const aqiLevel = air?.available
+          ? (air.aqi >= 150 ? 'high' : air.aqi >= 100 ? 'moderate' : 'low')
+          : 'unknown';
         return (
           <article className="map-site-card" key={site.key}>
             <div className="map-site-card__name">{site.name}</div>
@@ -174,6 +183,21 @@ export default function MapPage() {
               </div>
               <RiskBadge risk={cur?.overall_risk || cur?.risk || 'unknown'} label={cur?.overall_risk || cur?.risk} />
             </div>
+            {air?.available ? (
+              <div className="map-site-card__meta" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 8, marginTop: 4 }} data-testid={`map-air-${site.key}`}>
+                <div>
+                  <div className="card-label">Air (AQI)</div>
+                  <span className={`map-site-card__p map-site-card__p--${aqiLevel}`}>
+                    {Math.round(air.aqi)}
+                  </span>
+                </div>
+                <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{air.station_name ?? '—'}</span>
+              </div>
+            ) : (
+              <div className="muted" style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}>
+                Air quality: not configured
+              </div>
+            )}
           </article>
         );
       }),

@@ -17,6 +17,15 @@ import {
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
 
+// AQI colour band per US EPA breakpoints — used by the dashboard
+// KPI strip so the AQI number shifts colour with severity.
+const aqiLevel = (aqi) => {
+  if (aqi == null) return 'low';
+  if (aqi >= 150) return 'high';
+  if (aqi >= 100) return 'moderate';
+  return 'low';
+};
+
 function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
@@ -178,6 +187,27 @@ export default function Dashboard() {
                 </span>
                 <span className="kpi__sub">Threshold 60% / 30%</span>
               </div>
+              {forecast?.air?.available ? (
+                <div className="kpi" data-testid="kpi-air">
+                  <span className="kpi__label">Air quality</span>
+                  <span className={`kpi__value num kpi__value--${aqiLevel(forecast.air.aqi)}`}>
+                    {Math.round(forecast.air.aqi)}
+                  </span>
+                  <span className="kpi__sub">
+                    {forecast.air.quality === 'local'
+                      ? `AQICN · ${forecast.air.station_name || 'local station'}`
+                      : `AQICN · ${forecast.air.quality} station`}
+                  </span>
+                </div>
+              ) : (
+                <div className="kpi" data-testid="kpi-air">
+                  <span className="kpi__label">Air quality</span>
+                  <span className="kpi__value" style={{ fontSize: 'var(--text-lg)', color: 'var(--text-tertiary)' }}>
+                    —
+                  </span>
+                  <span className="kpi__sub">AQICN not configured</span>
+                </div>
+              )}
               <div className="kpi">
                 <span className="kpi__label">Model in use</span>
                 <span className="kpi__value" style={{ fontSize: 'var(--text-lg)' }}>
