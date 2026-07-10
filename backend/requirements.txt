@@ -21,3 +21,9 @@ seaborn==0.13.2
 pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
+
+# Optional external data providers (Storm Glass marine, AQICN air quality)
+# are implemented in app/lib/providers/ using the standard `requests`
+# library above. No additional dependencies are required. The libraries
+# are toggled per-role via SEASID_PROVIDER_{WEATHER,MARINE,AIR} env
+# variables; the corresponding *_API_KEY is read directly from .env.

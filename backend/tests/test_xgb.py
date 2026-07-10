@@ -89,12 +89,12 @@ class TestXGBPrediction:
         assert all(0 <= p <= 1 for p in proba)
 
     def test_feature_importance_shape(self, toy_feature_matrix):
-        """Feature importance returns all 11 features."""
+        """Feature importance returns all 14 features."""
         X, y = toy_feature_matrix
         result = train_xgb(X, y)
         bundle = {"model": result.model, "feature_columns": result.feature_columns}
 
         imp = feature_importance(bundle)
-        assert len(imp) == 11
+        assert len(imp) == 14
         assert "feature" in imp.columns
         assert "importance" in imp.columns

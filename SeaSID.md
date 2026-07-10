@@ -1,40 +1,64 @@
 # SeaSID — Build-from-scratch spec
 
-> **Status — v1 design doc, current implementation is v2.**
+> **Status — v1 design doc; the shipped codebase is v2.1.**
 > This document was the original v1 spec (XGBoost-only, 5 tables, 8 endpoints,
-> React + Recharts, Render + nginx + systemd). The codebase shipped as **v2**:
+> React + Recharts, Render + nginx + systemd). The codebase shipped as **v2.1**:
 > LSTM primary + XGBoost baseline + GRU ablation, 6 tables (added
-> `agent_conversations`), 13 endpoints (adds `/agent/chat`, `/agent/briefing`,
-> `/experiments/{run,results}`, `/labels`, `/ingest`, `/alerts/run`),
-> plain-CSS React (no Recharts, no Axios, no CSS Modules), Docker-only deploy.
-> See section "**v1 → v2 Drift Summary**" below; for the live surface consult
-> the docstrings in `backend/app/api/{main,services,schemas}.py` and the
-> `src/pages/*` files. `README.md` is the project description.
+> `agent_conversations`, **`marine_obs`**, **`air_quality_obs`**), 13 endpoints
+> (adds `/agent/chat`, `/agent/briefing`, `/experiments/{run,results}`,
+> `/labels`, `/ingest`, `/alerts/run`), 7 agent tools (added
+> `get_air_quality`), a pluggable provider registry (Open-Meteo default +
+> Storm Glass marine + AQICN air), 14-feature vector, plain-CSS React
+> (no Recharts, no Axios, no CSS Modules), Docker-only deploy.
+> See section "**v1 → v2.1 Drift Summary**" below; for the live surface
+> consult the docstrings in `backend/app/api/{main,services,schemas}.py`
+> and the `src/pages/*` files. **`README.md` is the project description.**
 
-## 0. v1 → v2 Drift Summary
+## 0. v1 → v2.1 Drift Summary
 
-| Area | v1 (sections 1–22 below) | v2 (current code) |
-|------|--------------------------|-------------------|
+| Area | v1 (sections 1–22 below) | v2.1 (current code) |
+|------|---------------------------|----------------------|
 | Primary model | XGBoost only | **LSTM (PyTorch) primary + XGBoost baseline + GRU ablation** |
+| Feature vector | 11 columns | **14 columns** (adds `aqi_recent`, `pm25_recent`, `wave_period_s_mean`) |
 | Endpoints (`/api/v1/...`) | 8 | **13** (adds `/agent/chat`, `/agent/briefing`, `/experiments/{run,results}`, `/labels`, `/ingest`, `/alerts/run`) |
-| Tables | 5 | **6** (adds `agent_conversations`) |
-| Frontend pages | Home · Forecast · Historical · OperatorVerify | Dashboard · Agent · Experiments · Verify |
+| Tables | 5 | **6** (adds `agent_conversations`, `marine_obs`, `air_quality_obs`) |
+| Provider layer | hardcoded Open-Meteo + WorldTides | **pluggable registry** (`SEASID_PROVIDER_{WEATHER,MARINE,AIR}`) — Open-Meteo default, Storm Glass optional, AQICN optional |
+| Agent tools | 6 | **7** (adds `get_air_quality`) |
+| LLM provider | OpenAI gpt-4o | **OpenAI-compatible** (MiniMax-M3 by default, swappable via `OPENAI_BASE_URL`) |
+| Frontend pages | Home · Forecast · Historical · OperatorVerify | Dashboard · Forecast · Map · Experiments · Verify · Settings |
 | Frontend stack | React + Recharts + Axios + CSS Modules | React + plain CSS (no Recharts, no Axios, no CSS Modules) |
+| Sidebar | always visible, fixed 232 px | **responsive** (drawer < 768 · narrow rail 768–1023 · collapsible full ≥ 1024) |
 | CORS | explicit allow-list of 3 origins | **explicit allow-list, overridable via `SEASID_ALLOWED_ORIGINS`** |
-| Forecast horizon | 24 h | **48 h** + `optimal_window` |
+| Forecast horizon | 24 h | **48 h** + `optimal_window` + optional `air` block |
 | Deploy | `render.yaml` (web + static) + nginx + systemd | **Single Docker image with frontend baked in** |
 | `/forecast` write behaviour | triggered alerts on every GET | **read-only** — alerts go through `POST /api/v1/alerts/run` |
 | Model reload | manual process restart | **automatic** on `POST /api/v1/experiments/run` |
-| Backend tests | 16 (section 13) | **45 passing** (asyncio_mode = auto) |
-| Frontend tests | 8 (section 13) | **8 added in this revision** (Vitest + RTL) |
+| Backend tests | 16 (section 13) | **66 passing** across 8 files |
+| Frontend tests | 8 (section 13) | **81 passing** across 20 files (Vitest + RTL) |
 | Python startup | `@app.on_event("startup")` (deprecated) | **`lifespan` async context manager** |
 | DB session resolution | `from app.lib.db import SessionLocal` (binds at import) | **qualified `db.SessionLocal()` access** so test fixtures can monkey-patch |
+| AI agent response | emoji-friendly markdown | **emoji-stripped**, professional typography via `MarkdownResponse` |
+| Agent popover | full-page `/agent` route | **floating FAB** on every page (400 × 560 popover) |
 
 **Reading guide:** sections 1–9 describe original v1 design intent and remain
 a reference for the data model, feature contract, and product framing.
 Sections 10–17 describe endpoints, UI, deployment, and tests as they were
 **specified in v1** — for the live surface, consult the docstrings at the top
 of `backend/app/api/main.py` and the `src/pages/*` components.
+
+### 0.1 v2.1 Provider Matrix (new in 2.1)
+
+| Role | Default | Optional | Env var to switch | Required key |
+|------|---------|----------|-------------------|--------------|
+| `weather` (precip, wind) | `open_meteo` | — | `SEASID_PROVIDER_WEATHER` | — |
+| `marine` (wave, swell, currents, water temp) | `open_meteo` | `stormglass` | `SEASID_PROVIDER_MARINE` | `STORMGLASS_API_KEY` |
+| `air` (AQI, PM2.5, PM10, O₃, NO₂) | `off` | `aqicn` | `SEASID_PROVIDER_AIR` | `AQICN_API_KEY` |
+| `tide` (tides only) | WorldTides | — | — | `WORLDTIDES_API_KEY` (optional — degrades to 0) |
+
+Open-Meteo is unlimited and key-less. Storm Glass and AQICN are free-tier
+constrained (50 / 1000 req/day respectively). The agent tool `get_air_quality`
+is now wired to this provider and returns a structured snapshot or a polite
+"not available" hint.
 
 ---
 

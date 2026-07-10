@@ -25,6 +25,34 @@ from app.lib.alerts import get_recent_alerts
 logger = logging.getLogger(__name__)
 
 
+def _latest_air_snapshot(site_key: str) -> dict | None:
+    """Most recent air_quality_obs row for a site, or None."""
+    session = db.SessionLocal()
+    try:
+        row = (
+            session.query(db.AirQualityObs)
+            .filter(db.AirQualityObs.site_key == site_key)
+            .order_by(db.AirQualityObs.ts.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return {
+            "ts": row.ts.isoformat() if row.ts else None,
+            "aqi": row.aqi,
+            "pm25": row.pm25,
+            "pm10": row.pm10,
+            "o3": row.o3,
+            "no2": row.no2,
+            "station_name": row.station_name,
+            "station_distance_km": row.distance_km,
+            "quality": row.quality,
+            "source": row.source,
+        }
+    finally:
+        session.close()
+
+
 def get_forecast(site_key: str, hours: int = 48) -> dict:
     """Generate a multi-hour forecast for a site.
 
@@ -75,13 +103,21 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     # Highlight the optimal window: the hour with the lowest p_bad.
     optimal = min(forecast_hours, key=lambda x: x["p_bad"])
 
-    return {
+    # Optional air-quality block — present only when AQICN has populated
+    # the air_quality_obs table for this site. Optional so deployments
+    # without AQICN_API_KEY still get a clean forecast response.
+    air = _latest_air_snapshot(site_key)
+
+    out = {
         "site_key": site_key,
         "site_name": site["name"],
         "generated_at": now.isoformat(),
         "hours": forecast_hours,
         "optimal_window": optimal,
     }
+    if air is not None:
+        out["air"] = air
+    return out
 
 
 def submit_verification(data: dict) -> dict:

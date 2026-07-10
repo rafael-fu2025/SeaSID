@@ -321,6 +321,80 @@ def check_alerts_handler(site_key: str) -> str:
         session.close()
 
 
+def get_air_quality_handler(site_key: str) -> str:
+    """Return the latest air-quality snapshot for a site, if available.
+
+    Pulls from the `air_quality_obs` table that the AQICN provider
+    populates during ingest. Returns a structured JSON object:
+
+      {
+        "site": "Dauin Muck Bays",
+        "ts": "2026-07-09T12:00:00+00:00",
+        "aqi": 42,
+        "pm25": 9.3, "pm10": 14.0, "o3": 28.0, "no2": 5.0,
+        "station_name": "Dumaguete Station",
+        "station_distance_km": 17.4,
+        "quality": "local",
+        "source": "aqicn"
+      }
+
+    If no AQICN snapshot exists for the site (provider disabled, no
+    key, or station unreachable), returns `{"available": false, ...}`
+    with a `reason` describing why.
+    """
+    from app.lib import db
+
+    site = get_site(site_key)
+    if site is None:
+        return json.dumps({"error": f"Unknown site: {site_key}. Valid: {site_keys()}"})
+
+    # Honour per-site opt-out (set in sites.py when the nearest AQICN
+    # station is > 500 km away — the free tier would return meaningless
+    # "distant" data we don't want to surface to operators).
+    if site.get("air_provider_disabled"):
+        return json.dumps({
+            "site": site["name"],
+            "available": False,
+            "reason": "disabled_for_site",
+            "hint": "Air-quality ingestion is disabled for this site (nearest AQICN station is too far for the free tier).",
+            "source": None,
+        })
+
+    session = db.SessionLocal()
+    try:
+        row = (
+            session.query(db.AirQualityObs)
+            .filter(db.AirQualityObs.site_key == site_key)
+            .order_by(db.AirQualityObs.ts.desc())
+            .first()
+        )
+        if row is None:
+            return json.dumps({
+                "site": site["name"],
+                "available": False,
+                "reason": "no_snapshot",
+                "hint": "No air-quality data yet. Configure AQICN_API_KEY and re-run ingest_site to enable.",
+                "source": None,
+            })
+        return json.dumps({
+            "site": site["name"],
+            "available": True,
+            "ts": row.ts.isoformat() if row.ts else None,
+            "aqi": row.aqi,
+            "pm25": row.pm25,
+            "pm10": row.pm10,
+            "o3": row.o3,
+            "no2": row.no2,
+            "station_id": row.station_id,
+            "station_name": row.station_name,
+            "station_distance_km": row.distance_km,
+            "quality": row.quality,
+            "source": row.source,
+        })
+    finally:
+        session.close()
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────
 
 TOOL_DEFINITIONS = [
@@ -346,27 +420,6 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "get_weather",
             "description": "Get detailed weather data for a dive site including precipitation, wind, waves, sea temperature, tides, air quality (AQI, PM2.5), and mean wave period.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "site_key": {
-                        "type": "string",
-                        "description": "The site identifier.",
-                    }
-                },
-                "required": ["site_key"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_air_quality",
-            "description": (
-                "Get the most recent air-quality snapshot for a dive site: AQI, "
-                "PM2.5, PM10, O3, NO2, and the reporting station. Useful when "
-                "haze or smoke might be a factor in dive safety."
-            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -428,6 +481,23 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "check_alerts",
             "description": "Check recent alerts (last 24 hours) for a dive site.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "site_key": {
+                        "type": "string",
+                        "description": "The site identifier.",
+                    }
+                },
+                "required": ["site_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_air_quality",
+            "description": "Return the most recent air-quality snapshot for a site (AQI, PM2.5, PM10, O3, NO2) sourced from AQICN. Use this when the user asks about air quality, smoke, haze, or pollution for sensitive divers.",
             "parameters": {
                 "type": "object",
                 "properties": {
