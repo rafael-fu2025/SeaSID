@@ -2053,19 +2053,30 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__footer {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Collapse / expand pill — only on full mode (≥ 1024 px).
+   Collapse / expand FAB — sibling of the sidebar, not a child.
    ═══════════════════════════════════════════════════════════════════════════
-   The pill hovers *above* the sidebar's top edge, anchored to the
-   right side so it sits exactly on the boundary between the sidebar
-   and the main column. This matches the professional pattern used by
-   Linear / Notion / Vercel rather than tucking it next to the brand
-   mark. A subtle ring on hover makes the hit-area obvious without
-   increasing its visual weight. */
+   This is a true FAB control:
+     - it is a child of .app-layout (not the sidebar), so it does NOT
+       inherit the sidebar's overflow, padding, or scroll behavior;
+     - it is position: absolute against .app-layout, anchored to the
+       current sidebar width via the existing --sidebar-current variable
+       (set to --sidebar-w-full when expanded, --sidebar-w-narrow when
+       collapsed), so it animates with the rail instead of jumping;
+     - its z-index is 60 — above the sidebar (20), the FAB (50), and
+       any content the main column can produce, so the chevron always
+       sits visibly on top of the seam;
+     - it is rendered only on `mode === "full"`. The drawer mode uses
+       its own close button (.sidebar__close), and the narrow rail
+       already has no labels so a collapse toggle is moot.
+   This matches the way Linear / Notion / Vercel ship their seam
+   control: a true floating affordance, not a tucked header button.
+*/
 
-.sidebar__collapse {
+.collapse-fab {
   position: absolute;
-  top: -14px;                          /* floats above the brand row */
-  right: -13px;                         /* straddles the sidebar/main seam */
+  top: -14px;                              /* floats above the rail's top edge */
+  left: calc(var(--sidebar-current) - 14px); /* sits half on each side of the seam */
+  transform: translateX(-50%);
   width: 28px;
   height: 28px;
   border-radius: 999px;
@@ -2075,62 +2086,60 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__footer {
   place-items: center;
   cursor: pointer;
   color: var(--text-secondary);
-  z-index: 30;                          /* above main column */
+  z-index: 60;                              /* above sidebar (20) + AgentFab (50) */
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.04) inset,
     0 2px 8px rgba(0, 0, 0, 0.30);
   transition:
     transform var(--sidebar-anim),
+    left var(--sidebar-anim),
     background var(--transition-fast),
     color var(--transition-fast),
     box-shadow var(--transition-fast),
-    border-color var(--transition-fast),
-    top var(--sidebar-anim),
-    right var(--sidebar-anim);
+    border-color var(--transition-fast);
 }
 
-/* Hide on every mode except full. */
-body[data-sidebar-mode="drawer"] .sidebar__collapse,
-body[data-sidebar-mode="narrow"] .sidebar__collapse {
-  display: none;
+/* Only on the desktop "full" mode. The drawer has its own close button,
+   and the narrow rail has nothing to collapse (it's already 64 px). */
+.collapse-fab { display: none; }
+
+body[data-sidebar-mode="full"] .collapse-fab {
+  display: grid;
 }
 
-.sidebar__collapse svg {
+.collapse-fab svg {
   transition: transform var(--sidebar-anim);
   transform: rotate(0deg);
 }
 
-.sidebar__collapse:hover {
+.collapse-fab:hover {
   background: var(--surface-2);
   color: var(--text-primary);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.06) inset,
     0 6px 14px rgba(0, 0, 0, 0.45);
-  transform: scale(1.05);
+  transform: translateX(-50%) scale(1.06);
 }
 
-.sidebar__collapse:focus-visible {
+.collapse-fab:focus-visible {
   outline: none;
   box-shadow:
     0 0 0 3px var(--accent-soft),
     0 2px 8px rgba(0, 0, 0, 0.30);
 }
 
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__collapse {
-  /* The pill is absolutely positioned inside .sidebar, so `right: 14px`
-     remains anchored to the rail's right edge in both states — no
-     override needed when the sidebar narrows to 64 px. */
+body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .collapse-fab {
+  /* Collapsed = narrow rail, accent-tinted pill, chevron rotated 180°. */
   background: var(--accent-soft);
   color: var(--accent);
   border-color: var(--accent-line);
-  transform: scale(1);
 }
 
-body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__collapse svg {
+body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .collapse-fab svg {
   transform: rotate(180deg);
 }
 
-.sidebar__collapse::after {
+.collapse-fab::after {
   content: '';
   position: absolute;
   inset: -4px;
@@ -2140,7 +2149,7 @@ body[data-sidebar-mode="full"][data-sidebar-collapsed="true"] .sidebar__collapse
   pointer-events: none;
 }
 
-.sidebar__collapse:active::after {
+.collapse-fab:active::after {
   background: var(--accent-soft);
 }
 

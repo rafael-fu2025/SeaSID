@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   GaugeIcon, WaveIcon, BrainIcon, ClipboardIcon, LabIcon,
-  MapIcon, SettingsIcon, ChevronRightIcon, XIcon,
+  MapIcon, SettingsIcon, XIcon,
 } from './icons';
 import { useSidebar } from '../theme/SidebarContext';
 
@@ -79,20 +79,6 @@ export default function Sidebar() {
         data-collapsed={collapsed ? 'true' : 'false'}
         aria-label="Primary"
       >
-        {mode === 'full' && (
-          <button
-            type="button"
-            className="sidebar__collapse"
-            onClick={toggleCollapse}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-pressed={collapsed}
-            data-testid="sidebar-collapse"
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            <ChevronRightIcon size={12} />
-          </button>
-        )}
-
         {mode === 'drawer' && (
           <button
             type="button"
