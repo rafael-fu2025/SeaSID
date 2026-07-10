@@ -1,157 +1,89 @@
-import { useState, useRef, useEffect, useId } from 'react';
-import { CheckIcon, ChevronDownIcon } from './icons';
+import { useEffect, useState } from 'react';
+import { api } from '@/api';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
 /**
- * Dropdown — controlled-style headless select with full keyboard navigation.
+ * Dropdown — backwards-compatible shim around shadcn `Select` so the
+ * existing Forecast.jsx (which imports `Dropdown`) keeps working
+ * while we migrate it. New code should prefer `SiteSelector`.
  *
- * Props:
- *   value:        current value (string|number)
- *   onChange:     (value) => void
- *   options:      [{ value, label, description? }]
- *   placeholder?: string
- *   className?:   extra classes for the outer wrapper
- *   ariaLabel?:   string
+ * Props mirror the legacy API:
+ *   value, onChange, options: [{ value, label, description? }],
+ *   placeholder?, className?, ariaLabel?, id?
+ *
+ * Behaviour:
+ *  - Fetches `/sites` once and uses the registered list if `options`
+ *    isn't provided.
+ *  - Falls back to a static default (Dauin Muck / Apo Reef) when the
+ *    API is offline so the UI never locks up.
  */
+const FALLBACK_OPTIONS = [
+  { value: 'dauin_muck', label: 'Dauin Muck', description: 'muck' },
+  { value: 'apo_reef',   label: 'Apo Reef',   description: 'reef' },
+];
+
 export default function Dropdown({
   value,
   onChange,
-  options = [],
-  placeholder = 'Select…',
+  options,
+  placeholder = 'Select site',
   className,
-  ariaLabel,
-  id,
+  ariaLabel = 'Select dive site',
+  id = 'dropdown',
 }) {
-  const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const wrapRef = useRef(null);
-  const menuRef = useRef(null);
-  const triggerRef = useRef(null);
-  const autoId = useId();
-  const menuId = id ? `${id}-menu` : `${autoId}-menu`;
+  const [fetched, setFetched] = useState(null);
 
-  const selected = options.find((o) => o.value === value);
-  const selectedIndex = options.findIndex((o) => o.value === value);
-
-  // Outside-click + Escape
   useEffect(() => {
-    if (!open) return;
-    const onDown = (e) => {
-      if (!wrapRef.current?.contains(e.target)) setOpen(false);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+    if (options) return;
+    let cancel = false;
+    api.getSites()
+      .then((sites) => {
+        if (cancel) return;
+        setFetched(
+          (sites || []).map((s) => ({
+            value: s.key,
+            label: s.name,
+            description: s.type,
+          })),
+        );
+      })
+      .catch(() => {
+        if (!cancel) setFetched(FALLBACK_OPTIONS);
+      });
+    return () => { cancel = true; };
+  }, [options]);
 
-  // Reset highlight when opening
-  useEffect(() => {
-    if (open) {
-      setHighlight(selectedIndex >= 0 ? selectedIndex : 0);
-      // Focus the menu for keyboard nav
-      requestAnimationFrame(() => menuRef.current?.focus());
-    }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const choose = (idx) => {
-    const o = options[idx];
-    if (!o) return;
-    onChange?.(o.value);
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  const onKeyDown = (e) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlight((h) => Math.min(options.length - 1, h + 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlight((h) => Math.max(0, h - 1));
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      choose(highlight);
-    } else if (e.key === 'Home') {
-      e.preventDefault();
-      setHighlight(0);
-    } else if (e.key === 'End') {
-      e.preventDefault();
-      setHighlight(options.length - 1);
-    }
-  };
+  const items = options || fetched || FALLBACK_OPTIONS;
 
   return (
-    <div
-      ref={wrapRef}
-      className={`dropdown ${open ? 'is-open' : ''} ${className || ''}`}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
+    <Select value={value} onValueChange={(v) => onChange?.(v)}>
+      <SelectTrigger
         id={id}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={menuId}
         aria-label={ariaLabel}
-        className="dropdown__trigger"
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={(e) => {
-          if (!open && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            setOpen(true);
-          }
-        }}
-        data-testid={id ? `dropdown-${id}` : undefined}
+        className={className}
+        data-testid={id}
       >
-        <span>{selected ? selected.label : placeholder}</span>
-        {selected?.description && (
-          <span className="dropdown__option-meta">{selected.description}</span>
-        )}
-      </button>
-
-      {open && (
-        <ul
-          ref={menuRef}
-          id={menuId}
-          role="listbox"
-          tabIndex={-1}
-          className="dropdown__menu"
-          aria-label={ariaLabel}
-          onKeyDown={onKeyDown}
-        >
-          {options.map((o, i) => (
-            <li key={o.value} role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected={o.value === value}
-                className={`dropdown__option ${i === highlight ? 'is-highlighted' : ''} ${
-                  o.value === value ? 'is-selected' : ''
-                }`}
-                onMouseEnter={() => setHighlight(i)}
-                onClick={() => choose(i)}
-                data-testid={`dropdown-option-${o.value}`}
-              >
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                  <span>{o.label}</span>
-                  {o.description && (
-                    <span className="dropdown__option-meta">{o.description}</span>
-                  )}
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((opt) => (
+          <SelectItem key={opt.value} value={opt.value}>
+            <span className="flex items-center gap-2">
+              {opt.description && (
+                <span className="inline-block size-1.5 rounded-full bg-foreground/40" />
+              )}
+              <span>{opt.label}</span>
+              {opt.description && (
+                <span className="ml-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {opt.description}
                 </span>
-                {o.value === value && <CheckIcon size={14} />}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+              )}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

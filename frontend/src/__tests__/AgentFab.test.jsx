@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import AgentFab from '../components/AgentFab';
-import { api } from '../api';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { AgentFab } from '@/components/AgentFab';
+import { api } from '@/api';
 
-vi.mock('../api', () => ({
+vi.mock('@/api', () => ({
   api: {
     getSites: vi.fn(),
     chat: vi.fn(),
@@ -24,85 +24,44 @@ beforeEach(() => {
   });
 });
 
+function renderFab() {
+  return render(
+    <TooltipProvider>
+      <AgentFab />
+    </TooltipProvider>,
+  );
+}
+
 describe('AgentFab', () => {
   it('renders a single floating button anchored bottom-right', () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
+    renderFab();
     const fab = screen.getByTestId('agent-fab');
     expect(fab).toBeInTheDocument();
     expect(fab.tagName.toLowerCase()).toBe('button');
-    expect(fab).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('does not show the popover until the FAB is clicked', () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
-    expect(screen.queryByTestId('agent-popover')).toBeNull();
-  });
-
-  it('opens the popover when the FAB is clicked', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
-    const fab = screen.getByTestId('agent-fab');
-    fireEvent.click(fab);
-    await waitFor(() => {
-      expect(screen.getByTestId('agent-popover')).toBeInTheDocument();
-    });
-    expect(fab).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('shows an empty-state hero with three prompt suggestions', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
+  it('opens the Sheet on FAB click and shows the empty state', async () => {
+    renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
     expect(await screen.findByText('SeaSID Agent')).toBeInTheDocument();
+    expect(screen.getByText(/no conversation yet/i)).toBeInTheDocument();
+    // Three suggestion chips match the legacy suggestion set.
     expect(screen.getByText(/should i dive at dauin/i)).toBeInTheDocument();
     expect(screen.getByText(/compare current conditions/i)).toBeInTheDocument();
-    expect(screen.getByText(/one-page safety briefing/i)).toBeInTheDocument();
+    expect(screen.getByText(/generate a one-page safety briefing/i)).toBeInTheDocument();
   });
 
-  it('sends a prompt via the api and renders the reply', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
+  it('renders a composer with input + send button', async () => {
+    renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    const prompt = await screen.findByText(/should i dive at dauin/i);
-    fireEvent.click(prompt);
-
-    await waitFor(() => {
-      expect(api.chat).toHaveBeenCalledTimes(1);
-    });
-
-    const args = api.chat.mock.calls[0];
-    expect(args[0]).toMatch(/dauin/i);
-    expect(args[2]).toBe('dauin_muck');
-
-    expect(await screen.findByText(/Conditions look safe at Dauin today/)).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-input')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-send')).toBeInTheDocument();
   });
 
-  it('closes when the close icon button is pressed', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
+  it('submits composer text on Enter and calls api.chat', async () => {
+    renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    const popover = await screen.findByTestId('agent-popover');
-    expect(popover).toBeInTheDocument();
-
-    // Scope the close lookup to inside the popover — the FAB itself has
-    // its own aria-label "Close agent chat" once the popover is open.
-    const closeBtn = popover.querySelector('button[aria-label="Close"]');
-    expect(closeBtn).not.toBeNull();
-    fireEvent.click(closeBtn);
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('agent-popover')).toBeNull();
-    });
-    expect(screen.getByTestId('agent-fab')).toHaveAttribute('aria-expanded', 'false');
-  });
-
-  it('renders a composer input + send button inside the popover', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    expect(await screen.findByTestId('fab-chat-input')).toBeInTheDocument();
-    expect(screen.getByTestId('fab-chat-send')).toBeInTheDocument();
-  });
-
-  it('submits the composer textarea on Enter (without Shift) and calls api.chat', async () => {
-    render(<MemoryRouter><AgentFab /></MemoryRouter>);
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    const input = await screen.findByTestId('fab-chat-input');
+    const input = await screen.findByTestId('agent-input');
     fireEvent.change(input, { target: { value: 'How rough is the water today?' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
 
@@ -113,5 +72,35 @@ describe('AgentFab', () => {
         'dauin_muck',
       );
     });
+  });
+
+  it('renders the reply from /agent/chat after a send', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const input = await screen.findByTestId('agent-input');
+    fireEvent.change(input, { target: { value: 'Brief the conditions' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+
+    expect(await screen.findByText(/conditions look safe at dauin today/i)).toBeInTheDocument();
+  });
+
+  it('responds to the global "seasid:open-agent" event', async () => {
+    renderFab();
+    window.dispatchEvent(new CustomEvent('seasid:open-agent'));
+    expect(await screen.findByText('SeaSID Agent')).toBeInTheDocument();
+  });
+
+  it('reset clears the conversation history', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const input = await screen.findByTestId('agent-input');
+    fireEvent.change(input, { target: { value: 'Quick question' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+    await screen.findByText(/conditions look safe at dauin today/i);
+
+    const reset = screen.getByTestId('agent-reset');
+    fireEvent.click(reset);
+    // Back to empty-state after reset.
+    expect(await screen.findByText(/no conversation yet/i)).toBeInTheDocument();
   });
 });

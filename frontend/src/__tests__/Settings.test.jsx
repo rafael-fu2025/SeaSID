@@ -1,31 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import Settings from '../pages/Settings';
-import { ThemeProvider } from '../theme/ThemeContext';
-import { SidebarProvider } from '../theme/SidebarContext';
-import { api } from '../api';
+import { ThemeProvider } from '@/theme/ThemeContext';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import Settings from '@/pages/Settings';
+import { api } from '@/api';
 
-vi.mock('../api', () => ({
+vi.mock('@/api', () => ({
   api: { getSites: vi.fn(), health: vi.fn() },
 }));
 
-const safeStorage = () => {
-  try {
-    if (typeof window !== 'undefined'
-        && window.localStorage
-        && typeof window.localStorage.clear === 'function') {
-      return window.localStorage;
-    }
-  } catch {}
-  return null;
-};
-
 beforeEach(() => {
-  const ls = safeStorage();
-  if (ls) {
-    try { ls.clear(); } catch {}
-  }
+  try { window.localStorage.clear(); } catch {}
   vi.resetAllMocks();
   api.getSites.mockResolvedValue([
     { key: 'dauin_muck', name: 'Dauin Muck Bays', type: 'muck' },
@@ -35,21 +21,17 @@ beforeEach(() => {
     status: 'ok',
     version: '2.1.0',
     model_loaded: 'lstm',
-    db_tables: 8,
-    providers: {
-      weather: 'open_meteo',
-      marine: 'open_meteo',
-    },
+    providers: { weather: 'open_meteo', marine: 'open_meteo' },
   });
 });
 
 function renderSettings() {
   return render(
     <ThemeProvider>
-      <SidebarProvider>
+      <TooltipProvider>
         <MemoryRouter><Settings /></MemoryRouter>
-      </SidebarProvider>
-    </ThemeProvider>
+      </TooltipProvider>
+    </ThemeProvider>,
   );
 }
 
@@ -61,7 +43,7 @@ describe('Settings page', () => {
     expect(screen.getByTestId('settings-tools')).toBeInTheDocument();
   });
 
-  it('renders the tools table with all seven entries (v2.1)', () => {
+  it('renders the tools table with all seven v2.1 entries', () => {
     renderSettings();
     const table = screen.getByTestId('tools-table');
     expect(table).toBeInTheDocument();
@@ -76,26 +58,24 @@ describe('Settings page', () => {
 
   it('surfaces live data-source providers from /api/v1/health', async () => {
     api.health.mockResolvedValueOnce({
-      status: 'ok', version: '2.1.0', model_loaded: 'lstm', db_tables: 8,
+      status: 'ok', version: '2.1.0', model_loaded: 'lstm',
       providers: { weather: 'open_meteo', marine: 'stormglass', air: 'aqicn' },
     });
     renderSettings();
     expect(await screen.findByTestId('settings-providers')).toBeInTheDocument();
-    // The provider name is shown in the card's coords line; the status
-    // line says "Default" or "Custom" depending on the role.
     expect(screen.getByTestId('provider-status-weather').textContent).toMatch(/default/i);
     expect(screen.getByTestId('provider-status-marine').textContent).toMatch(/custom/i);
     expect(screen.getByTestId('provider-status-air').textContent).toMatch(/custom/i);
-    // The custom provider name appears in the card's coords line.
-    const cards = screen.getAllByTestId('settings-providers')[0].querySelectorAll('.map-site-card');
-    expect(cards[0].textContent).toContain('open_meteo');
-    expect(cards[1].textContent).toContain('stormglass');
-    expect(cards[2].textContent).toContain('aqicn');
+    // Provider names appear in the rendered cards as well
+    const providerCard = screen.getByTestId('settings-providers');
+    expect(providerCard.textContent).toContain('open_meteo');
+    expect(providerCard.textContent).toContain('stormglass');
+    expect(providerCard.textContent).toContain('aqicn');
   });
 
   it('shows the air provider as not-configured when omitted from health', async () => {
     api.health.mockResolvedValueOnce({
-      status: 'ok', version: '2.1.0', model_loaded: 'lstm', db_tables: 8,
+      status: 'ok', version: '2.1.0', model_loaded: 'lstm',
       providers: { weather: 'open_meteo', marine: 'open_meteo' },
     });
     renderSettings();
@@ -105,23 +85,20 @@ describe('Settings page', () => {
 
   it('shows Light / Dark toggle, defaulting to dark', () => {
     renderSettings();
-    expect(screen.getByTestId('theme-dark').className).toMatch(/is-active/);
-    expect(screen.getByTestId('theme-light').className).not.toMatch(/is-active/);
+    const dark = screen.getByTestId('theme-dark');
+    const light = screen.getByTestId('theme-light');
+    // Active state is on the dark button (aria-selected)
+    expect(dark.getAttribute('aria-selected')).toBe('true');
+    expect(light.getAttribute('aria-selected')).toBe('false');
   });
 
   it('switches to light when the Light pill is clicked', () => {
     renderSettings();
-    fireEvent.click(screen.getByTestId('theme-light'));
-    expect(screen.getByTestId('theme-light').className).toMatch(/is-active/);
+    act(() => {
+      fireEvent.click(screen.getByTestId('theme-light'));
+    });
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-  });
-
-  it('persists the light theme choice via the data-theme attribute', () => {
-    renderSettings();
-    fireEvent.click(screen.getByTestId('theme-light'));
-    // jsdom doesn't always persist writes across the localStorage backing in
-    // this configuration, so we assert the side effect (data-theme) instead.
-    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(screen.getByTestId('theme-light').getAttribute('aria-selected')).toBe('true');
   });
 
   it('toggles a tool off when its switch is clicked', () => {
@@ -133,9 +110,10 @@ describe('Settings page', () => {
   });
 
   it('defaults the theme to dark even if no storage entry exists', () => {
-    expect(safeStorage()?.getItem('seasid.theme')).toBeFalsy();
+    // jsdom storage may be unavailable in some sandboxed environments
+    // (vitest emits `--localstorage-file` warnings); the durable
+    // assertion is that the dark tab is the active default.
     renderSettings();
-    expect(screen.getByTestId('theme-dark').className).toMatch(/is-active/);
+    expect(screen.getByTestId('theme-dark').getAttribute('aria-selected')).toBe('true');
   });
 });
-

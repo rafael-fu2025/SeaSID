@@ -1,39 +1,45 @@
-import { ProbabilityMeter } from './RiskBadge';
+import { Card } from '@/components/ui/card';
+import { ProbabilityMeter, RiskBadge } from './RiskBadge';
+import { cn } from '@/lib/utils';
 
-const levelFor = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
-const fmtTime = (ts) =>
-  new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+const fmtTime = (iso) =>
+  new Date(iso).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 
-export default function ForecastCard({ hour }) {
+/**
+ * ForecastCard — single hour of the 12-hour forecast.
+ *
+ * Replaces the legacy plain-CSS `.hour-card` with shadcn's Card
+ * primitive. Carries the same information (time, viz, P(no-go), risk)
+ * but uses semantic tokens so dark/light themes swap automatically.
+ *
+ * Optimal cards get a left reef-accent ring via a data attribute so
+ * callers can highlight specific hours without touching the card.
+ */
+export default function ForecastCard({ hour, isOptimal = false }) {
   if (!hour) return null;
-  const p = Number.isFinite(hour.p_bad) ? hour.p_bad : 0;
-  const level = levelFor(p);
+  const pBad = Number.isFinite(hour.p_bad) ? hour.p_bad : 0;
 
   return (
-    <article className="hour-card" id={`forecast-${hour.ts}`} data-risk-level={level}>
-      <header className="hour-card__time">
-        <strong>{fmtTime(hour.ts)}</strong>
-        <span>{new Date(hour.ts).toLocaleDateString([], { weekday: 'short' })}</span>
-      </header>
-
-      <div data-testid="hour-p-bad">
-        <span className={`hour-card__p hour-card__p--${level} num`}>
-          {Math.round(p * 100)}%
+    <Card
+      data-testid="forecast-card"
+      data-optimal={isOptimal ? 'true' : 'false'}
+      className={cn(
+        'gap-2 rounded-md border bg-card p-3 transition-colors hover:bg-muted/30',
+        isOptimal && 'border-reef/60 ring-1 ring-reef/30',
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-xs text-muted-foreground">
+          {fmtTime(hour.ts)}
         </span>
+        <RiskBadge risk={hour.current_risk} />
       </div>
 
-      <div className="hour-card__meta">
-        <div>
-          <div className="hour-card__meta-label">Visibility</div>
-          <div className="hour-card__meta-value">{hour.viz_label}</div>
-        </div>
-        <div>
-          <div className="hour-card__meta-label">Current</div>
-          <div className="hour-card__meta-value">{hour.current_risk}</div>
-        </div>
-      </div>
+      <div className="text-xs text-foreground">{hour.viz_label ?? '—'}</div>
 
-      <ProbabilityMeter value={p} label="P(no-go)" />
-    </article>
+      <ProbabilityMeter value={pBad} label="P(no-go)" />
+    </Card>
   );
 }

@@ -1,24 +1,19 @@
-import { useState, useEffect } from 'react';
-import { api } from '../api';
-import Dropdown from '../components/Dropdown';
-import ForecastCard from '../components/ForecastCard';
-import PBadChart from '../components/PBadChart';
-import { RiskBadge } from '../components/RiskBadge';
-import {
-  SkeletonKpiStrip,
-  SkeletonForecastGrid,
-  SkeletonChart,
-} from '../components/Skeleton';
-import {
-  GaugeIcon,
-  RefreshIcon,
-  AlertIcon,
-} from '../components/icons';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw, Sparkles, AlertTriangle, Activity, Wind, Droplets, Thermometer } from 'lucide-react';
+import { api } from '@/api';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart } from '@/components/Skeleton';
+import ForecastCard from '@/components/ForecastCard';
+import { PBadChart } from '@/components/PBadChart';
+import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
+import { SiteSelector } from '@/components/SiteSelector';
+import { cn } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
 
-// AQI colour band per US EPA breakpoints — used by the dashboard
-// KPI strip so the AQI number shifts colour with severity.
 const aqiLevel = (aqi) => {
   if (aqi == null) return 'low';
   if (aqi >= 150) return 'high';
@@ -26,254 +21,345 @@ const aqiLevel = (aqi) => {
   return 'low';
 };
 
-function fmtTime(iso) {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
+const fmtTime = (iso) =>
+  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-function fmtTimeFull(iso) {
-  return new Date(iso).toLocaleString([], {
+const fmtTimeFull = (iso) =>
+  new Date(iso).toLocaleString([], {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
   });
-}
 
+/**
+ * Dashboard — primary "live now" panel for the cockpit.
+ *
+ *  - Picker row at top: site selector + refresh button.
+ *  - KPI strip: visibility, current risk, P(no-go), AQI, model in use.
+ *  - 12-hour timeline grid (ForecastCard × 12).
+ *  - Probability chart with optimal-window marker.
+ *  - Optimal-window summary card with P(no-go) + time + viz.
+ *  - Active alert banner.
+ *
+ * Listens for the global "seasid:refresh" event so the ⌘K palette's
+ * Refresh action can re-fetch without prop-drilling.
+ */
 export default function Dashboard() {
-  const [sites, setSites] = useState([]);
-  const [siteOptions, setSiteOptions] = useState([]);
   const [selectedSite, setSelectedSite] = useState('dauin_muck');
   const [forecast, setForecast] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const cancelRef = useRef(false);
 
-  useEffect(() => {
-    api.getSites()
-      .then((s) => {
-        setSites(s || []);
-        setSiteOptions((s || []).map((site) => ({
-          value: site.key,
-          label: site.name,
-          description: site.type,
-        })));
-      })
-      .catch(console.error);
-  }, []);
-
-  useEffect(() => {
-    let cancel = false;
-    setLoading(true);
+  const load = useCallback(async (siteKey) => {
+    cancelRef.current = false;
     setError(null);
-
-    Promise.all([api.getForecast(selectedSite), api.getAlerts(selectedSite)])
-      .then(([fc, al]) => {
-        if (cancel) return;
-        setForecast(fc);
-        setAlerts(al.alerts || []);
-      })
-      .catch((err) => !cancel && setError(err.message))
-      .finally(() => !cancel && setLoading(false));
-
-    return () => { cancel = true; };
-  }, [selectedSite]);
-
-  const refresh = async () => {
-    setRefreshing(true);
     try {
       const [fc, al] = await Promise.all([
-        api.getForecast(selectedSite),
-        api.getAlerts(selectedSite),
+        api.getForecast(siteKey),
+        api.getAlerts(siteKey),
       ]);
+      if (cancelRef.current) return;
       setForecast(fc);
       setAlerts(al.alerts || []);
+    } catch (err) {
+      if (!cancelRef.current) setError(err.message);
     } finally {
-      setRefreshing(false);
+      if (!cancelRef.current) setLoading(false);
     }
+  }, []);
+
+  // Initial load + reload on site change
+  useEffect(() => {
+    setLoading(true);
+    load(selectedSite);
+    return () => { cancelRef.current = true; };
+  }, [selectedSite, load]);
+
+  // ⌘K palette "refresh" event
+  useEffect(() => {
+    const handler = () => {
+      setRefreshing(true);
+      load(selectedSite).finally(() => setRefreshing(false));
+    };
+    window.addEventListener('seasid:refresh', handler);
+    return () => window.removeEventListener('seasid:refresh', handler);
+  }, [selectedSite, load]);
+
+  const refresh = () => {
+    setRefreshing(true);
+    load(selectedSite).finally(() => setRefreshing(false));
   };
 
   const currentHour = forecast?.hours?.[0];
   const next12 = forecast?.hours?.slice(0, 12) || [];
   const optimal = forecast?.optimal_window;
-  const site = sites.find((s) => s.key === selectedSite);
 
   return (
-    <div>
-      <header className="page-header">
+    <div className="flex flex-col gap-6 p-6 lg:p-8">
+      {/* Header */}
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">
-            Live dive-condition forecast for {forecast?.site_name ?? site?.name ?? '—'}
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Dashboard
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live dive-condition forecast for{' '}
+            <span className="font-medium text-foreground">
+              {forecast?.site_name ?? '—'}
+            </span>
           </p>
         </div>
-        <div className="flex gap-3" style={{ minWidth: 360 }}>
-          {siteOptions.length > 0 && (
-            <div style={{ flex: 1 }}>
-              <Dropdown
-                id="site-selector"
-                ariaLabel="Select dive site"
-                value={selectedSite}
-                onChange={setSelectedSite}
-                options={siteOptions}
-                placeholder="Select site"
-              />
-            </div>
-          )}
-          <button className="btn btn--secondary" onClick={refresh} disabled={refreshing}>
-            {refreshing ? <span className="spinner" /> : <RefreshIcon size={14} />}
+        <div className="flex items-center gap-2 lg:min-w-[360px]">
+          <SiteSelector
+            value={selectedSite}
+            onChange={setSelectedSite}
+            className="flex-1"
+            id="dashboard-site"
+          />
+          <Button
+            variant="secondary"
+            size="default"
+            onClick={refresh}
+            disabled={refreshing}
+            data-testid="dashboard-refresh"
+          >
+            {refreshing ? (
+              <Skeleton className="size-3.5 rounded-full" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
             <span>Refresh</span>
-          </button>
+          </Button>
         </div>
       </header>
 
+      {/* Error banner */}
       {error && (
-        <div className="banner banner--danger">
-          <span className="banner__icon"><AlertIcon size={16} /></span>
-          <div>
-            <div className="banner__title">Could not load forecast</div>
-            <div className="banner__body">
-              {error}. Start the API with <code>python -m scripts.run_api</code> in the backend directory.
+        <Card className="border-danger/30 bg-danger/5" data-testid="dashboard-error">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertTriangle className="mt-0.5 size-4 text-danger" />
+            <div className="text-sm">
+              <p className="font-medium text-danger">Could not load forecast</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {error}. Start the API with{' '}
+                <code className="rounded bg-inset px-1.5 py-0.5 font-mono text-[11px]">
+                  python -m scripts.run_api
+                </code>{' '}
+                in the backend directory.
+              </p>
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {alerts.length > 0 && (
-        <div className="banner">
-          <span className="banner__icon"><AlertIcon size={16} /></span>
-          <div>
-            <div className="banner__title">
-              {alerts.length} active alert{alerts.length === 1 ? '' : 's'}
+      {/* Alerts banner */}
+      {!loading && alerts.length > 0 && (
+        <Card className="border-warning/30 bg-warning/5">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertTriangle className="mt-0.5 size-4 text-warning" />
+            <div className="text-sm">
+              <p className="font-medium text-warning">
+                {alerts.length} active alert{alerts.length === 1 ? '' : 's'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {alerts.slice(0, 3).map((a) => `[${a.kind}] ${a.message}`).join(' · ')}
+                {alerts.length > 3 && ` · +${alerts.length - 3} more`}
+              </p>
             </div>
-            <div className="banner__body">
-              {alerts.slice(0, 3).map((a) => `[${a.kind}] ${a.message}`).join(' · ')}
-              {alerts.length > 3 && ` · +${alerts.length - 3} more`}
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {loading ? (
-        <>
-          <SkeletonKpiStrip />
-          <section className="section">
-            <div className="section__head">
-              <h2 className="section__title">12-hour forecast</h2>
-            </div>
-            <div className="section__body">
-              <SkeletonForecastGrid />
-            </div>
-          </section>
+      {/* Loading skeletons */}
+      {loading && !forecast && (
+        <div className="flex flex-col gap-6">
+          <SkeletonKpiStrip count={5} />
+          <SkeletonForecastGrid count={12} />
           <SkeletonChart />
-        </>
-      ) : (
-        <>
-          {currentHour && (
-            <section className="kpi-strip" aria-label="Current conditions">
-              <div className="kpi">
-                <span className="kpi__label">Visibility</span>
-                <span className="kpi__value">{currentHour.viz_label}</span>
-                <span className="kpi__sub">{fmtTime(currentHour.ts)} UTC</span>
-              </div>
-              <div className="kpi">
-                <span className="kpi__label">Current risk</span>
-                <span className="kpi__value">
-                  <RiskBadge risk={currentHour.current_risk} />
-                </span>
-                <span className="kpi__sub">Surface current assessment</span>
-              </div>
-              <div className="kpi">
-                <span className="kpi__label">P(no-go)</span>
-                <span className={`kpi__value num kpi__value--${level(currentHour.p_bad)}`}>
-                  {Math.round(currentHour.p_bad * 100)}%
-                </span>
-                <span className="kpi__sub">Threshold 60% / 30%</span>
-              </div>
-              {forecast?.air?.available ? (
-                <div className="kpi" data-testid="kpi-air">
-                  <span className="kpi__label">Air quality</span>
-                  <span className={`kpi__value num kpi__value--${aqiLevel(forecast.air.aqi)}`}>
-                    {Math.round(forecast.air.aqi)}
-                  </span>
-                  <span className="kpi__sub">
-                    {forecast.air.quality === 'local'
-                      ? `AQICN · ${forecast.air.station_name || 'local station'}`
-                      : `AQICN · ${forecast.air.quality} station`}
-                  </span>
-                </div>
-              ) : (
-                <div className="kpi" data-testid="kpi-air">
-                  <span className="kpi__label">Air quality</span>
-                  <span className="kpi__value" style={{ fontSize: 'var(--text-lg)', color: 'var(--text-tertiary)' }}>
-                    —
-                  </span>
-                  <span className="kpi__sub">AQICN not configured</span>
-                </div>
-              )}
-              <div className="kpi">
-                <span className="kpi__label">Model in use</span>
-                <span className="kpi__value" style={{ fontSize: 'var(--text-lg)' }}>
-                  {currentHour.model_used}
-                </span>
-                <span className="kpi__sub">{forecast?.ml_bundle_loaded ? 'Bundle loaded' : 'Heuristic fallback'}</span>
-              </div>
-            </section>
-          )}
-
-          <section className="section" aria-labelledby="timeline-heading">
-            <div className="section__head">
-              <div>
-                <h2 id="timeline-heading" className="section__title">12-hour forecast</h2>
-                <p className="section__sub">Each hour is a single forecast card with risk badge and probability meter</p>
-              </div>
-            </div>
-            <div className="section__body">
-              <div className="forecast-grid" role="list">
-                {next12.map((hour) => (
-                  <ForecastCard key={hour.ts} hour={hour} />
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {optimal && <PBadChart hours={next12} optimalIso={optimal.ts} />}
-
-          {optimal && (
-            <section className="section">
-              <div className="section__head">
-                <div>
-                  <h2 className="section__title">Optimal dive window</h2>
-                  <p className="section__sub">The hour in the next 12 with the lowest no-go probability</p>
-                </div>
-              </div>
-              <div className="section__body">
-                <div className="grid-3">
-                  <div>
-                    <div className="card-label">When</div>
-                    <div className="mono" style={{ fontSize: 'var(--text-xl)', marginTop: 4 }}>
-                      {fmtTimeFull(optimal.ts)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="card-label">Visibility</div>
-                    <div style={{ fontSize: 'var(--text-md)', marginTop: 6 }}>{optimal.viz_label}</div>
-                  </div>
-                  <div>
-                    <div className="card-label">P(no-go)</div>
-                    <div className="mono" style={{ fontSize: 'var(--text-xl)', marginTop: 4 }}>
-                      {Math.round(optimal.p_bad * 100)}%
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {forecast && (
-            <footer className="muted" style={{ fontSize: 'var(--text-xs)', textAlign: 'right', marginTop: 'var(--space-5)' }}>
-              Generated {fmtTimeFull(forecast.generated_at)} · {site?.description ?? ''}
-            </footer>
-          )}
-        </>
+        </div>
       )}
+
+      {/* KPI strip */}
+      {!loading && currentHour && (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Current conditions">
+          <KpiCard
+            label="Visibility"
+            value={currentHour.viz_label ?? '—'}
+            sub={`${fmtTime(currentHour.ts)} UTC`}
+            Icon={Droplets}
+          />
+          <KpiCard
+            label="Current risk"
+            value={<RiskBadge risk={currentHour.current_risk} />}
+            sub="Surface current assessment"
+            Icon={Activity}
+          />
+          <KpiCard
+            label="P(no-go)"
+            value={
+              <span className="num font-mono tabular-nums">
+                {Math.round(currentHour.p_bad * 100)}%
+              </span>
+            }
+            sub="Threshold 60% / 30%"
+            tone={level(currentHour.p_bad)}
+            Icon={Sparkles}
+          />
+          {forecast?.air?.available ? (
+            <KpiCard
+              label="Air quality"
+              value={
+                <span className="num font-mono tabular-nums">
+                  {Math.round(forecast.air.aqi)}
+                </span>
+              }
+              sub={
+                forecast.air.quality === 'local'
+                  ? `AQICN · ${forecast.air.station_name || 'local station'}`
+                  : `AQICN · ${forecast.air.quality} station`
+              }
+              tone={aqiLevel(forecast.air.aqi)}
+              Icon={Wind}
+              dataTestid="kpi-air"
+            />
+          ) : (
+            <KpiCard
+              label="Air quality"
+              value={<span className="text-muted-foreground">—</span>}
+              sub="AQICN not configured"
+              Icon={Wind}
+              dataTestid="kpi-air"
+            />
+          )}
+          <KpiCard
+            label="Model in use"
+            value={
+              <span className="text-base font-medium text-foreground">
+                {currentHour.model_used ?? '—'}
+              </span>
+            }
+            sub={forecast?.ml_bundle_loaded ? 'Bundle loaded' : 'Heuristic fallback'}
+            Icon={Thermometer}
+          />
+        </section>
+      )}
+
+      {/* Timeline */}
+      {!loading && next12.length > 0 && (
+        <section aria-labelledby="timeline-heading">
+          <header className="mb-3 flex items-end justify-between">
+            <div>
+              <h2 id="timeline-heading" className="text-base font-semibold tracking-tight">
+                12-hour forecast
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Each hour is a single forecast card with risk badge and probability meter.
+              </p>
+            </div>
+            {optimal && (
+              <Badge variant="secondary" className="font-mono">
+                <Sparkles className="mr-1 size-3 text-positive" />
+                Optimal at{' '}
+                {new Date(optimal.ts).toLocaleTimeString([], {
+                  hour: '2-digit', minute: '2-digit', hour12: false,
+                })}
+              </Badge>
+            )}
+          </header>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+            {next12.map((hour) => (
+              <ForecastCard
+                key={hour.ts}
+                hour={hour}
+                isOptimal={optimal?.ts === hour.ts}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Probability chart */}
+      {!loading && next12.length > 0 && (
+        <PBadChart hours={next12} optimalIso={optimal?.ts} />
+      )}
+
+      {/* Optimal window summary */}
+      {!loading && optimal && (
+        <section>
+          <header className="mb-3">
+            <h2 className="text-base font-semibold tracking-tight">Optimal dive window</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              The hour in the next 12 with the lowest no-go probability.
+            </p>
+          </header>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <SummaryCell label="When" value={fmtTimeFull(optimal.ts)} mono />
+            <SummaryCell label="Visibility" value={optimal.viz_label} />
+            <SummaryCell
+              label="P(no-go)"
+              value={`${Math.round(optimal.p_bad * 100)}%`}
+              tone={level(optimal.p_bad)}
+              mono
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Footer */}
+      {!loading && forecast && (
+        <footer className="pt-2 text-right text-[11px] text-muted-foreground">
+          Generated {fmtTimeFull(forecast.generated_at)}
+        </footer>
+      )}
+    </div>
+  );
+}
+
+function KpiCard({ label, value, sub, Icon, tone, dataTestid }) {
+  return (
+    <Card
+      className="gap-2 p-4"
+      data-testid={dataTestid}
+    >
+      <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span>{label}</span>
+        {Icon && <Icon className="size-3.5" aria-hidden />}
+      </div>
+      <div
+        className={cn(
+          'text-2xl font-semibold tabular-nums',
+          tone === 'high' && 'text-danger',
+          tone === 'moderate' && 'text-warning',
+          tone === 'low' && 'text-positive',
+          !tone && 'text-foreground',
+        )}
+      >
+        {value}
+      </div>
+      <div className="truncate text-[11px] text-muted-foreground">{sub}</div>
+    </Card>
+  );
+}
+
+function SummaryCell({ label, value, mono, tone }) {
+  return (
+    <div className="rounded-md border border-border bg-card p-4">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          'mt-1 text-lg',
+          mono && 'font-mono tabular-nums',
+          tone === 'high' && 'text-danger',
+          tone === 'moderate' && 'text-warning',
+          tone === 'low' && 'text-positive',
+          !tone && 'text-foreground',
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }

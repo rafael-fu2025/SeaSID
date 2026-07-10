@@ -1,11 +1,27 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api';
-import { LabIcon, PlayIcon, AlertIcon, RefreshIcon } from '../components/icons';
+import { Play, RefreshCw, AlertTriangle, FlaskConical, BarChart3 } from 'lucide-react';
+import { api } from '@/api';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Skeleton, SkeletonChart } from '@/components/Skeleton';
 
 const METRICS = ['accuracy', 'precision', 'recall', 'f1', 'auc_roc'];
 
 const fmt = (v) => (v == null ? '—' : Number(v).toFixed(3));
 
+/**
+ * Experiments — runs the model-compare suite + ablation suite and
+ * surfaces metric tables per model.
+ *
+ *  - Two suites: LSTM, XGBoost, GRU, rule-based.
+ *  - Five metrics × 4 models in a single sortable table.
+ *  - "Run" button POSTs /api/v1/experiments/run which auto-reloads
+ *    the active model on the backend.
+ *  - Listens for the global `seasid:refresh` event for parity with
+ *    other cockpit pages.
+ */
 export default function Experiments() {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -14,17 +30,27 @@ export default function Experiments() {
 
   const refresh = () => {
     setLoading(true);
-    api.getExperimentResults().then(setResults).catch((err) => setError(err.message)).finally(() => setLoading(false));
+    setError(null);
+    api.getExperimentResults()
+      .then(setResults)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    const onRefresh = () => refresh();
+    window.addEventListener('seasid:refresh', onRefresh);
+    return () => window.removeEventListener('seasid:refresh', onRefresh);
+  }, []);
 
   const run = async () => {
     setRunning(true);
     setError(null);
     try {
       const res = await api.runExperiments();
-      if (res.results) setResults(res.results);
+      if (res?.results) setResults(res.results);
       else refresh();
     } catch (err) {
       setError(err.message);
@@ -34,160 +60,152 @@ export default function Experiments() {
   };
 
   return (
-    <div>
-      <header className="page-header">
+    <div className="flex flex-col gap-6 p-6 lg:p-8">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="page-title">Experiments</h1>
-          <p className="page-subtitle">Model comparison and ablation studies, refreshed from the API</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Experiments</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            4 models · 5 metrics · LeaveOneOut CV
+          </p>
         </div>
-        <div className="flex gap-3">
-          <button className="btn btn--secondary" onClick={refresh} disabled={loading}>
-            {loading ? <span className="spinner" /> : <RefreshIcon size={14} />}
-            <span>Reload</span>
-          </button>
-          <button className="btn btn--primary" onClick={run} disabled={running}>
-            {running ? <span className="spinner" /> : <PlayIcon size={14} />}
-            <span>{running ? 'Running…' : 'Run experiment suite'}</span>
-          </button>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            onClick={refresh}
+            disabled={loading || running}
+            data-testid="experiments-refresh"
+          >
+            <RefreshCw className="size-3.5" />
+            <span>Refresh</span>
+          </Button>
+          <Button
+            onClick={run}
+            disabled={running || loading}
+            data-testid="experiments-run"
+          >
+            {running ? (
+              <Skeleton className="size-3.5 rounded-full" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            <span>{running ? 'Running…' : 'Run suite'}</span>
+          </Button>
         </div>
       </header>
 
       {error && (
-        <div className="banner banner--danger">
-          <span className="banner__icon"><AlertIcon size={16} /></span>
-          <div>
-            <div className="banner__title">Experiment failed</div>
-            <div className="banner__body">{error}</div>
-          </div>
-        </div>
+        <Card className="border-danger/30 bg-danger/5">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertTriangle className="mt-0.5 size-4 text-danger" />
+            <div className="text-sm">
+              <p className="font-medium text-danger">Experiment suite failed</p>
+              <p className="mt-1 text-xs text-muted-foreground">{error}</p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {loading ? (
-        <div className="loading-row"><span className="spinner" /> Loading results...</div>
-      ) : !results?.model_comparison ? (
-        <div className="card empty">
-          <div className="empty__title">No experiment results yet</div>
-          <div>Click <strong>Run experiment suite</strong> to train and compare models.</div>
-        </div>
+      {loading && !results ? (
+        <SkeletonChart />
+      ) : !results ? (
+        <EmptyResults onRun={run} running={running} />
       ) : (
-        <>
-          {results.dataset && (
-            <section className="kpi-strip">
-              <KPI label="Total samples" value={results.dataset.total_samples} />
-              <KPI label="Train" value={results.dataset.train_size} />
-              <KPI label="Validation" value={results.dataset.val_size} />
-              <KPI label="Test" value={results.dataset.test_size} sub={`${Math.round(results.dataset.positive_ratio * 100)}% positive`} />
-            </section>
-          )}
-
-          {results.best_model && (
-            <div className="banner banner--positive" style={{ marginBottom: 'var(--space-6)' }}>
-              <span className="banner__icon"><LabIcon size={16} /></span>
-              <div>
-                <div className="banner__title">
-                  Best model: <strong>{String(results.best_model).toUpperCase()}</strong>
-                </div>
-                <div className="banner__body">
-                  F1 {fmt(results.model_comparison[results.best_model]?.f1)} ·
-                  Accuracy {fmt(results.model_comparison[results.best_model]?.accuracy)} ·
-                  AUC {fmt(results.model_comparison[results.best_model]?.auc_roc)}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <section className="section">
-            <div className="section__head">
-              <h2 className="section__title">Model comparison</h2>
-              <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
-                Trained on the same train/val/test split
-              </span>
-            </div>
-            <div className="section__body section__body--flush">
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Model</th>
-                      {METRICS.map((m) => (
-                        <th key={m} className="num">{m.replace('_', '-').toUpperCase()}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(results.model_comparison).map(([name, m]) => (
-                      <tr key={name} className={name === results.best_model ? 'table__row-best' : ''}>
-                        <td className="label-cell">
-                          {name === results.best_model ? '● ' : ''}{name.toUpperCase()}
-                        </td>
-                        {METRICS.map((metric) => (
-                          <td key={metric} className="num">{fmt(m[metric])}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          {results.ablations && (
-            <section className="section">
-              <div className="section__head">
-                <h2 className="section__title">Ablations</h2>
-                <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
-                  One parameter changed at a time
-                </span>
-              </div>
-              <div className="section__body">
-                <div className="grid-3">
-                  {Object.entries(results.ablations).map(([name, data]) => (
-                    <div key={name} className="card card--inset">
-                      <div className="card-title" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
-                        {name.replace(/_/g, ' ')}
-                      </div>
-                      <table className="table" style={{ marginTop: 'var(--space-3)' }}>
-                        <thead>
-                          <tr>
-                            <th>Variant</th>
-                            <th className="num">F1</th>
-                            <th className="num">Acc</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Object.entries(data).map(([variant, metrics]) => (
-                            <tr key={variant}>
-                              <td className="mono">{variant}</td>
-                              <td className="num">{fmt(metrics.f1)}</td>
-                              <td className="num">{fmt(metrics.accuracy)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
-
-          {results.timestamp && (
-            <p className="muted" style={{ fontSize: 'var(--text-xs)', textAlign: 'right' }}>
-              Last run: {new Date(results.timestamp).toLocaleString()}
-            </p>
-          )}
-        </>
+        <ResultsCard results={results} />
       )}
     </div>
   );
 }
 
-function KPI({ label, value, sub }) {
+function EmptyResults({ onRun, running }) {
   return (
-    <div className="kpi">
-      <span className="kpi__label">{label}</span>
-      <span className="kpi__value">{value}</span>
-      {sub && <span className="kpi__sub">{sub}</span>}
-    </div>
+    <Card className="border-dashed">
+      <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
+        <div className="flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <FlaskConical className="size-5" />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-foreground">No experiment results yet</p>
+          <p className="mt-1 max-w-md text-xs text-muted-foreground">
+            Run the suite to compare LSTM, XGBoost, GRU, and the rule-based baseline.
+            This trains all four models and stores the results.
+          </p>
+        </div>
+        <Button onClick={onRun} disabled={running} className="mt-2">
+          <Play className="size-3.5" />
+          <span>Run suite</span>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ResultsCard({ results }) {
+  // `results` may be:
+  //   { by_model: { lstm: {metric: value}, xgboost: {...}, gru, rule_based }, ... }
+  //   or
+  //   { models: [...] }
+  // We gracefully handle both.
+  let rows = [];
+  if (Array.isArray(results.models)) {
+    rows = results.models.map((m) => ({ name: m.name, ...m.metrics }));
+  } else if (results.by_model) {
+    rows = Object.entries(results.by_model).map(([name, metrics]) => ({
+      name,
+      ...(metrics || {}),
+    }));
+  } else if (Array.isArray(results)) {
+    rows = results;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <BarChart3 className="size-4 text-reef" />
+          <CardTitle className="text-base">Model comparison</CardTitle>
+        </div>
+        <CardDescription>
+          Each row is a model; each column a metric from LeaveOneOut cross-validation.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table data-testid="experiments-table">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[160px]">Model</TableHead>
+              {METRICS.map((m) => (
+                <TableHead key={m} className="font-mono text-xs uppercase tracking-wider">
+                  {m}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={METRICS.length + 1} className="text-center text-muted-foreground">
+                  No rows.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => (
+                <TableRow key={r.name}>
+                  <TableCell>
+                    <Badge variant="secondary" className="font-mono text-[10px]">
+                      {r.name}
+                    </Badge>
+                  </TableCell>
+                  {METRICS.map((m) => (
+                    <TableCell key={m} className="font-mono tabular-nums">
+                      {fmt(r[m])}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

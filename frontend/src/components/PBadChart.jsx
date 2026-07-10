@@ -1,290 +1,204 @@
-import { useState, useRef } from 'react';
-import { StarIcon, InfoIcon } from './icons';
+import { useMemo } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Activity } from 'lucide-react';
 
 /**
- * PBadChart — line chart for P(no-go) over a forecast window.
+ * PBadChart — 12-hour probability-of-no-go line chart.
  *
- * Implementation:
- *  - pure SVG (no third-party chart lib)
- *  - gradient stroke for subtle visual weight
- *  - interactive overlay: hovering shows a tooltip with timestamp + value
- *  - optimal hour drawn as a starred marker
+ * Pure SVG (no charting library). Renders:
+ *  - 0.60 / 0.30 threshold grid (no-go / caution bands)
+ *  - Filled area under the curve
+ *  - A vertical pin on the optimal hour
+ *  - X-axis: HH:MM labels every 3 hours
+ *  - Y-axis: 0..1 with implicit band coloring
  *
- * Props:
- *   hours:        array of { ts: ISO8601, p_bad: 0..1 }
- *   optimalIso?:  ISO8601 string for the optimal-window hour
- *   width?:       svg viewBox width (default 960)
- *   height?:      svg viewBox height (default 280)
+ * All fills/strokes use Tailwind utility classes mapped to SeaSID
+ * design tokens, so dark/light themes swap cleanly without code changes.
  */
-export default function PBadChart({
-  hours = [],
-  optimalIso = null,
-  width = 960,
-  height = 280,
-}) {
-  const PAD = { l: 48, r: 24, t: 24, b: 36 };
-  const innerW = width - PAD.l - PAD.r;
-  const innerH = height - PAD.t - PAD.b;
-  const svgRef = useRef(null);
-  const [hover, setHover] = useState(null);
+const VIEW_W = 720;
+const VIEW_H = 220;
+const MARGIN = { top: 16, right: 16, bottom: 28, left: 32 };
+const PLOT_W = VIEW_W - MARGIN.left - MARGIN.right;
+const PLOT_H = VIEW_H - MARGIN.top - MARGIN.bottom;
 
-  if (!hours.length) {
-    return (
-      <div className="chart-frame__body empty">
-        <div className="empty__title">No forecast data</div>
-        <div>Pull a fresh forecast from the dashboard to populate the chart.</div>
-      </div>
-    );
-  }
+const fmtTime = (iso) =>
+  new Date(iso).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 
-  const n = hours.length;
-  const xAt = (i) => PAD.l + (i * innerW) / Math.max(1, n - 1);
-  const yAt = (v) => {
-    const c = Math.max(0, Math.min(1, v));
-    return PAD.t + innerH - c * innerH;
-  };
-
-  const points = hours.map((h, i) => ({
-    x: xAt(i),
-    y: yAt(h.p_bad ?? 0),
-    raw: h,
-    i,
-  }));
-
-  const linePath = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
-    .join(' ');
-
-  const areaPath =
-    linePath +
-    ` L${points.at(-1).x.toFixed(1)},${(PAD.t + innerH).toFixed(1)}` +
-    ` L${points[0].x.toFixed(1)},${(PAD.t + innerH).toFixed(1)} Z`;
-
-  const optIdx = optimalIso ? hours.findIndex((h) => h.ts === optimalIso) : -1;
-
-  // Y ticks: 0, 25, 50, 75, 100
-  const yticks = [0, 0.25, 0.5, 0.75, 1.0];
-
-  // X ticks: show 4 evenly-spaced labels
-  const xTicks = (() => {
-    if (n <= 1) return [0];
-    const positions = [0, Math.round(n * 0.33), Math.round(n * 0.66), n - 1];
-    return Array.from(new Set(positions));
-  })();
-
-  const fmtHour = (iso) =>
-    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
-  const handleMove = (evt) => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const ratio = width / rect.width;
-    const xLocal = (evt.clientX - rect.left) * ratio;
-    // Find nearest point by x distance
-    let best = points[0];
-    let bestDist = Infinity;
-    for (const p of points) {
-      const d = Math.abs(p.x - xLocal);
-      if (d < bestDist) {
-        bestDist = d;
-        best = p;
-      }
-    }
-    setHover({ ...best, px: best.x / ratio, py: best.y / ratio });
-  };
+function PBadChart({ hours = [], optimalIso }) {
+  const data = useMemo(() => buildSeries(hours, optimalIso), [hours, optimalIso]);
 
   return (
-    <div className="chart-frame" data-testid="pbad-chart">
-      <div className="chart-frame__head">
-        <div>
-          <div className="chart-frame__title">Probability of a no-go day</div>
-          <div className="chart-frame__sub muted">Hourly, next {n} hours · lower is safer</div>
-        </div>
-        <div className="chart-frame__legend">
-          <div className="chart-frame__legend-item">
-            <span className="chart-frame__legend-dot" /> P(no-go)
-          </div>
-          <div className="chart-frame__legend-item">
-            <span className="chart-frame__legend-dot chart-frame__legend-dot--optimal" /> Optimal window
-          </div>
-        </div>
-      </div>
-
-      <div style={{ position: 'relative' }}>
-        <svg
-          ref={svgRef}
-          className="pbad-svg"
-          viewBox={`0 0 ${width} ${height}`}
-          preserveAspectRatio="none"
-          onMouseMove={handleMove}
-          onMouseLeave={() => setHover(null)}
-        >
-          <defs>
-            <linearGradient id="pbad-fill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-            </linearGradient>
-            <linearGradient id="pbad-stroke" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0%" stopColor="var(--accent)" />
-              <stop offset="100%" stopColor="var(--accent-hover)" />
-            </linearGradient>
-            <clipPath id="pbad-clip">
-              <rect x={PAD.l} y={PAD.t} width={innerW} height={innerH} />
-            </clipPath>
-          </defs>
-
-          {/* y gridlines */}
-          {yticks.map((t) => {
-            const y = PAD.t + innerH - t * innerH;
-            return (
-              <g key={t}>
+    <Card className="rounded-md" data-testid="pbad-chart">
+      <CardHeader className="pb-1">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Activity className="size-4 text-reef" />
+          Probability of no-go · 12 hours
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {data.points.length === 0 ? (
+          <p className="py-6 text-center text-xs text-muted-foreground">
+            No forecast data.
+          </p>
+        ) : (
+          <>
+            <svg
+              viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+              data-testid="pbad-chart-svg"
+              className="h-44 w-full"
+              role="img"
+              aria-label="12-hour P(no-go) chart"
+            >
+              {/* Threshold bands */}
+              <rect
+                x={MARGIN.left}
+                y={MARGIN.top}
+                width={PLOT_W}
+                height={PLOT_H * 0.4}
+                className="fill-danger/10"
+                aria-hidden
+              />
+              <rect
+                x={MARGIN.left}
+                y={MARGIN.top + PLOT_H * 0.4}
+                width={PLOT_W}
+                height={PLOT_H * 0.3}
+                className="fill-warning/10"
+                aria-hidden
+              />
+              {/* Grid lines */}
+              {[0, 0.25, 0.5, 0.75, 1].map((v) => (
                 <line
-                  x1={PAD.l}
-                  y1={y}
-                  x2={PAD.l + innerW}
-                  y2={y}
-                  stroke="var(--border-subtle)"
-                  strokeDasharray={t === 0 ? '0' : '2 4'}
+                  key={v}
+                  x1={MARGIN.left}
+                  x2={VIEW_W - MARGIN.right}
+                  y1={MARGIN.top + (1 - v) * PLOT_H}
+                  y2={MARGIN.top + (1 - v) * PLOT_H}
+                  className="stroke-border"
+                  strokeWidth={1}
+                  strokeDasharray={v === 0 ? '' : '2 4'}
+                  aria-hidden
                 />
+              ))}
+              {/* Y-axis labels */}
+              {[0, 0.5, 1].map((v) => (
                 <text
-                  x={PAD.l - 10}
-                  y={y + 4}
-                  fontSize="10"
-                  fill="var(--text-tertiary)"
+                  key={v}
+                  x={MARGIN.left - 6}
+                  y={MARGIN.top + (1 - v) * PLOT_H + 3}
                   textAnchor="end"
-                  fontFamily="var(--font-mono)"
+                  className="fill-muted-foreground font-mono text-[10px]"
                 >
-                  {(t * 100).toFixed(0)}%
+                  {Math.round(v * 100)}%
                 </text>
-              </g>
-            );
-          })}
-
-          {/* area + line */}
-          <g clipPath="url(#pbad-clip)">
-            <path d={areaPath} fill="url(#pbad-fill)" />
-            <path
-              d={linePath}
-              fill="none"
-              stroke="url(#pbad-stroke)"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </g>
-
-          {/* baseline axis */}
-          <line
-            x1={PAD.l}
-            y1={PAD.t + innerH}
-            x2={PAD.l + innerW}
-            y2={PAD.t + innerH}
-            stroke="var(--border-default)"
-          />
-          <line
-            x1={PAD.l}
-            y1={PAD.t}
-            x2={PAD.l}
-            y2={PAD.t + innerH}
-            stroke="var(--border-default)"
-          />
-
-          {/* points */}
-          {points.map((p, i) => {
-            const isOpt = i === optIdx;
-            return (
-              <g key={i}>
+              ))}
+              {/* Area under the curve */}
+              <path d={areaPath(data.points)} className="fill-reef/15" />
+              {/* Curve */}
+              <path d={linePath(data.points)} className="stroke-reef" strokeWidth={2} fill="none" />
+              {/* Points */}
+              {data.points.map((p) => (
                 <circle
+                  key={p.x}
                   cx={p.x}
                   cy={p.y}
-                  r={isOpt ? 5 : 3.5}
-                  fill={isOpt ? 'var(--positive)' : 'var(--surface-0)'}
-                  stroke={isOpt ? 'var(--positive)' : 'var(--accent)'}
-                  strokeWidth="2"
+                  r={p.isOptimal ? 5 : 2.5}
+                  className={
+                    p.isOptimal
+                      ? 'fill-reef stroke-foreground'
+                      : 'fill-reef/80 stroke-transparent'
+                  }
+                  strokeWidth={p.isOptimal ? 2 : 0}
                 />
-                {isOpt && (
+              ))}
+              {/* Optimal marker */}
+              {data.optimalPoint && (
+                <g>
+                  <line
+                    x1={data.optimalPoint.x}
+                    x2={data.optimalPoint.x}
+                    y1={MARGIN.top}
+                    y2={VIEW_H - MARGIN.bottom}
+                    className="stroke-reef"
+                    strokeWidth={1.5}
+                    strokeDasharray="3 3"
+                  />
                   <text
-                    x={p.x}
-                    y={p.y - 12}
-                    fontSize="11"
-                    fill="var(--positive)"
+                    x={data.optimalPoint.x}
+                    y={MARGIN.top + 6}
                     textAnchor="middle"
-                    fontWeight="500"
+                    className="fill-reef text-[10px] font-semibold uppercase tracking-wider"
                   >
-                    optimal · {fmtHour(p.raw.ts)}
+                    optimal
                   </text>
-                )}
-              </g>
-            );
-          })}
-
-          {/* x-axis labels */}
-          {xTicks.map((i) => {
-            const h = hours[i];
-            const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
-            return (
-              <text
-                key={i}
-                x={xAt(i)}
-                y={height - 12}
-                fontSize="10"
-                fill="var(--text-tertiary)"
-                textAnchor={anchor}
-                fontFamily="var(--font-mono)"
-              >
-                {fmtHour(h.ts)}
-              </text>
-            );
-          })}
-
-          {/* hover crosshair */}
-          {hover && (
-            <g pointerEvents="none">
-              <line
-                x1={hover.x}
-                y1={PAD.t}
-                x2={hover.x}
-                y2={PAD.t + innerH}
-                stroke="var(--border-strong)"
-                strokeDasharray="3 3"
-              />
-            </g>
-          )}
-        </svg>
-
-        {hover && (
-          <div
-            className="pbad-tooltip"
-            style={{
-              left: hover.px,
-              top: hover.py,
-              transform: 'translate(-50%, calc(-100% - 12px))',
-            }}
-          >
-            <div className="pbad-tooltip__row">
-              <span>Time</span>
-              <span className="pbad-tooltip__time">{fmtHour(hover.raw.ts)}</span>
-            </div>
-            <div className="pbad-tooltip__row">
-              <span>P(no-go)</span>
-              <span className="mono">{Math.round((hover.raw.p_bad ?? 0) * 100)}%</span>
-            </div>
-            <div className="pbad-tooltip__row">
-              <span>Risk</span>
-              <span>{hover.raw.risk || '—'}</span>
-            </div>
-          </div>
+                </g>
+              )}
+              {/* X-axis labels */}
+              {data.xLabels.map((l) => (
+                <text
+                  key={l.x}
+                  x={l.x}
+                  y={VIEW_H - MARGIN.bottom + 16}
+                  textAnchor="middle"
+                  className="fill-muted-foreground font-mono text-[10px]"
+                >
+                  {l.label}
+                </text>
+              ))}
+            </svg>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Red band ≥ 60% (no-go) · amber 30–60% (caution). Generated{' '}
+              {data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '—'}.
+            </p>
+          </>
         )}
-      </div>
-
-      <p className="muted" style={{ fontSize: 'var(--text-xs)', marginTop: 'var(--space-3)' }}>
-        <InfoIcon size={12} /> Computed from rolling 24/48h weather + tide features; LSTM model
-        when loaded, otherwise rule-based proxy.
-      </p>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
-// Re-exports kept for tests / older imports.
-export { StarIcon };
+function buildSeries(hours, optimalIso) {
+  if (!Array.isArray(hours) || hours.length === 0) {
+    return { points: [], xLabels: [], optimalPoint: null, generatedAt: null };
+  }
+  const n = hours.length;
+  const points = hours.map((h, i) => {
+    const x = MARGIN.left + (i / Math.max(n - 1, 1)) * PLOT_W;
+    const y = MARGIN.top + (1 - (h.p_bad ?? 0)) * PLOT_H;
+    return { x, y, isOptimal: optimalIso && h.ts === optimalIso, h };
+  });
+  const xLabels = hours
+    .filter((_, i) => i % 3 === 0 || i === hours.length - 1)
+    .map((h, idx) => {
+      const i = hours.indexOf(h);
+      return {
+        x: MARGIN.left + (i / Math.max(n - 1, 1)) * PLOT_W,
+        label: fmtTime(h.ts),
+      };
+    });
+  return {
+    points,
+    xLabels,
+    optimalPoint: points.find((p) => p.isOptimal) || null,
+    generatedAt: hours[0]?.generated_at,
+  };
+}
+
+function linePath(points) {
+  return points.reduce((acc, p, i) => {
+    const cmd = i === 0 ? 'M' : 'L';
+    return `${acc} ${cmd} ${p.x} ${p.y}`;
+  }, '').trim();
+}
+
+function areaPath(points) {
+  const line = linePath(points);
+  const last = points[points.length - 1];
+  const first = points[0];
+  return `${line} L ${last.x} ${VIEW_H - MARGIN.bottom} L ${first.x} ${VIEW_H - MARGIN.bottom} Z`;
+}
+
+export default PBadChart;
+export { PBadChart };
