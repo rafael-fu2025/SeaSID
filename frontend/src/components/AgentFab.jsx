@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import { Bot, Send, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -54,30 +53,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState(null);
   const scrollRef = useRef(null);
-  const location = useLocation();
 
-  // Hide the floating trigger on the Map page — the Leaflet map's
-  // bottom-right control cluster sits in the same spot, and the FAB
-  // button intercepts clicks meant for the map. Users on /map can
-  // still summon the agent via the in-page header button or ⌘.
-  const hideFab = location.pathname.startsWith('/map');
-
-  // External trigger from CommandPalette (and the in-page "Open agent"
-  // button on the Map page).
+  // External trigger from CommandPalette (and any in-page "Open agent"
+  // button that wants to summon the FAB).
   useEffect(() => {
     const handler = () => setOpen(true);
     window.addEventListener('seasid:open-agent', handler);
     return () => window.removeEventListener('seasid:open-agent', handler);
   }, []);
-
-  // Notify the rest of the app whenever the Sheet opens or closes so
-  // Leaflet maps / canvas charts can recompute their size. We dispatch
-  // on every transition (open and close) and let consumers debounce.
-  useEffect(() => {
-    window.dispatchEvent(
-      new CustomEvent('seasid:agent-sheet', { detail: { open } }),
-    );
-  }, [open]);
 
   // Auto-scroll transcript on new content
   useEffect(() => {
@@ -238,15 +221,12 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           type="button"
           aria-label="Open AI agent"
           data-testid="agent-fab"
-          aria-hidden={hideFab ? 'true' : undefined}
-          tabIndex={hideFab ? -1 : undefined}
           className={cn(
             'fixed bottom-12 right-4 z-40 flex size-12 items-center justify-center rounded-full',
             'bg-reef text-reef-foreground shadow-lg ring-1 ring-foreground/10',
             'transition-transform hover:scale-105 focus-visible:outline-none',
             'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             open && 'rotate-12',
-            hideFab && 'pointer-events-none hidden',
           )}
         >
           <Bot className="size-5" />

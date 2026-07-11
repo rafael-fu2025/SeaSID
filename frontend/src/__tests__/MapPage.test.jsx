@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import MapPage from '../pages/MapPage';
 import { api } from '../api';
@@ -63,5 +63,22 @@ describe('Map page', () => {
     api.getSites.mockRejectedValue(new Error('network down'));
     render(<MemoryRouter><MapPage /></MemoryRouter>);
     expect(await screen.findByText(/network down/i)).toBeInTheDocument();
+  });
+
+  it('keeps Leaflet intact when the agent Sheet opens', () => {
+    render(<MemoryRouter><MapPage /></MemoryRouter>);
+    const container = screen.getByTestId('leaflet-map');
+    const initialClassName = container.className;
+    // The enclosing card creates a low stacking context, keeping Leaflet's
+    // high-z-index panes below the agent Sheet backdrop.
+    expect(container.closest('[class*="relative"]')).toHaveClass('z-0');
+
+    // The sheet is an overlay, not a layout resize. Opening it must not
+    // alter the Leaflet container or trigger its expensive tile repaint.
+    act(() => {
+      window.dispatchEvent(new CustomEvent('seasid:agent-sheet', { detail: { open: true } }));
+    });
+    expect(container.className).toBe(initialClassName);
+    expect(container).not.toHaveAttribute('aria-hidden');
   });
 });

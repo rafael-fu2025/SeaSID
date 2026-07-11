@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Map as MapIcon, AlertTriangle, Crosshair, Bot } from 'lucide-react';
+import { Map as MapIcon, AlertTriangle, Crosshair } from 'lucide-react';
 import { api } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Button } from '@/components/ui/button';
 import { RiskBadge } from '@/components/RiskBadge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
@@ -90,11 +89,10 @@ export default function MapPage() {
     return () => { map.remove(); mapRef.current = null; layerGroupRef.current = null; };
   }, []);
 
-  // Re-measure Leaflet whenever the agent Sheet opens or closes (or the
-  // window resizes). Without this, Leaflet's tile layer keeps the
-  // dimensions it computed at mount time even when an overlay covers
-  // part of the container — leaving a visible gap on the side the
-  // Sheet sits over. `invalidateSize()` is the documented cure.
+  // Re-measure Leaflet when the viewport changes. The agent Sheet is a
+  // modal overlay, so it does not change this container's dimensions.
+  // Invalidating the map while that overlay opens can make its tile layer
+  // repaint blank; leave the map alone until a real resize occurs.
   useEffect(() => {
     const invalidate = () => {
       const m = mapRef.current;
@@ -103,16 +101,13 @@ export default function MapPage() {
       // before Leaflet re-measures. Otherwise we still get a stale size.
       requestAnimationFrame(() => m.invalidateSize());
     };
-    const onSheet = () => invalidate();
     const onResize = () => invalidate();
-    window.addEventListener('seasid:agent-sheet', onSheet);
     window.addEventListener('resize', onResize);
     // Also invalidate once on mount in case the container's final size
     // arrives after Leaflet's first measurement (common when the page
     // mounts before the cockpit's right rail has sized itself).
     invalidate();
     return () => {
-      window.removeEventListener('seasid:agent-sheet', onSheet);
       window.removeEventListener('resize', onResize);
     };
   }, []);
@@ -169,22 +164,11 @@ export default function MapPage() {
   return (
     <div className="flex min-w-0 flex-col gap-6 p-6 lg:p-8">
       {/* Header */}
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Map</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Geographic view of every dive site on OpenStreetMap, with a P(no-go) heat-radius overlay.
-          </p>
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => window.dispatchEvent(new CustomEvent('seasid:open-agent'))}
-          data-testid="open-agent-from-map"
-        >
-          <Bot className="size-3.5" />
-          <span>Open agent</span>
-        </Button>
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Map</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Geographic view of every dive site on OpenStreetMap, with a P(no-go) heat-radius overlay.
+        </p>
       </header>
 
       {error && (
@@ -199,8 +183,12 @@ export default function MapPage() {
         </Card>
       )}
 
-      {/* Map frame */}
-      <Card className="w-full min-w-0 overflow-hidden p-0">
+      {/*
+        Leaflet's panes use high z-index values for markers and controls.
+        Isolate them in this low stacking context so Radix's Sheet backdrop
+        remains above the whole map, just like it is above the other content.
+      */}
+      <Card className="relative z-0 w-full min-w-0 overflow-hidden p-0">
         <CardHeader className="border-b border-border bg-card px-4 py-3">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm">

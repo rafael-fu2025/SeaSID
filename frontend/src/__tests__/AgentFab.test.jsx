@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AgentFab } from '@/components/AgentFab';
 import { api, streamChat } from '@/api';
@@ -30,11 +29,9 @@ beforeEach(() => {
 
 function renderFab() {
   return render(
-    <MemoryRouter>
-      <TooltipProvider>
-        <AgentFab />
-      </TooltipProvider>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <AgentFab />
+    </TooltipProvider>,
   );
 }
 
