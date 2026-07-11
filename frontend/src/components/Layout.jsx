@@ -133,7 +133,7 @@ function DesktopShell({
           />
         </div>
 
-        <main className="min-w-0 flex-1 overflow-y-auto bg-background">
+        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
           <Outlet />
         </main>
 
@@ -162,7 +162,7 @@ function DesktopShell({
 function MobileShell({ resetLayout, openPalette, openAgent }) {
   return (
     <>
-      <main className="min-h-0 flex-1 overflow-y-auto bg-background">
+      <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         <Outlet />
       </main>
 

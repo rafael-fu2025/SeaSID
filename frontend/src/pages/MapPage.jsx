@@ -89,6 +89,29 @@ export default function MapPage() {
     return () => { map.remove(); mapRef.current = null; layerGroupRef.current = null; };
   }, []);
 
+  // Re-measure Leaflet when the viewport changes. The agent Sheet is a
+  // modal overlay, so it does not change this container's dimensions.
+  // Invalidating the map while that overlay opens can make its tile layer
+  // repaint blank; leave the map alone until a real resize occurs.
+  useEffect(() => {
+    const invalidate = () => {
+      const m = mapRef.current;
+      if (!m || typeof m.invalidateSize !== 'function') return;
+      // Defer one frame so any CSS transition on the Sheet has settled
+      // before Leaflet re-measures. Otherwise we still get a stale size.
+      requestAnimationFrame(() => m.invalidateSize());
+    };
+    const onResize = () => invalidate();
+    window.addEventListener('resize', onResize);
+    // Also invalidate once on mount in case the container's final size
+    // arrives after Leaflet's first measurement (common when the page
+    // mounts before the cockpit's right rail has sized itself).
+    invalidate();
+    return () => {
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
+
   // (Re)draw markers + heat circles when data changes.
   useEffect(() => {
     const group = layerGroupRef.current;
@@ -139,7 +162,7 @@ export default function MapPage() {
   }, [sites, forecasts]);
 
   return (
-    <div className="flex flex-col gap-6 p-6 lg:p-8">
+    <div className="flex min-w-0 flex-col gap-6 p-6 lg:p-8">
       {/* Header */}
       <header>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Map</h1>
@@ -160,8 +183,12 @@ export default function MapPage() {
         </Card>
       )}
 
-      {/* Map frame */}
-      <Card className="overflow-hidden p-0">
+      {/*
+        Leaflet's panes use high z-index values for markers and controls.
+        Isolate them in this low stacking context so Radix's Sheet backdrop
+        remains above the whole map, just like it is above the other content.
+      */}
+      <Card className="relative z-0 w-full min-w-0 overflow-hidden p-0">
         <CardHeader className="border-b border-border bg-card px-4 py-3">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm">
@@ -173,7 +200,7 @@ export default function MapPage() {
         </CardHeader>
         <div
           ref={containerRef}
-          className="h-[480px] w-full"
+          className="h-[480px] w-full max-w-full"
           data-testid="leaflet-map"
         />
       </Card>

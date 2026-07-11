@@ -54,7 +54,8 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [conversationId, setConversationId] = useState(null);
   const scrollRef = useRef(null);
 
-  // External trigger from CommandPalette
+  // External trigger from CommandPalette (and any in-page "Open agent"
+  // button that wants to summon the FAB).
   useEffect(() => {
     const handler = () => setOpen(true);
     window.addEventListener('seasid:open-agent', handler);

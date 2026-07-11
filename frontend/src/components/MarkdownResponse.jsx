@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Emojis that the agent sometimes inserts look unprofessional in a dive-safety
 // context. Match by codepoint, regex-based so we don't have to maintain a list.
@@ -39,6 +40,7 @@ export default function MarkdownResponse({ children, dense = false, className = 
       data-testid="markdown-response"
     >
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => (dense ? <span>{children}</span> : <p>{children}</p>),
           h1: ({ children }) => (
