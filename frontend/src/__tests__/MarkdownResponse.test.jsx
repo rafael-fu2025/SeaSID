@@ -35,4 +35,19 @@ describe('MarkdownResponse', () => {
     const { container } = render(<MarkdownResponse>Use `inline code` in prose.</MarkdownResponse>);
     expect(container.querySelector('code')).toHaveTextContent(/inline code/);
   });
+
+  it('renders GitHub-flavored markdown tables as a table', () => {
+    const markdown = [
+      '| Tool | What it does |',
+      '| --- | --- |',
+      '| get_weather | Detailed weather conditions |',
+      '| list_sites | Available dive sites |',
+    ].join('\n');
+    const { container } = render(<MarkdownResponse>{markdown}</MarkdownResponse>);
+
+    expect(container.querySelector('table')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Tool' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'get_weather' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'Detailed weather conditions' })).toBeInTheDocument();
+  });
 });
