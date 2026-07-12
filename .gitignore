@@ -63,3 +63,7 @@ Thumbs.db
 *.orig
 *.rej
 .idea/workspace.xml
+
+# ── Roadmap / planning docs (kept local, not tracked) ──────────────────────
+nextMove.md
+nextMove_assessment.md
