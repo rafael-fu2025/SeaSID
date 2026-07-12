@@ -329,10 +329,28 @@ def _run_ablations(
     except Exception as exc:
         feature_results["weather_only_7"] = {"f1": 0.0, "error": str(exc)}
 
-    feature_results["all_11"] = {"f1": float(f1_score(y_test, (predict_proba_lstm(
-        {"model": train_lstm(X_train_seq, y_train, LSTMTrainConfig(max_epochs=50, patience=5)).model,
-         "scaler": train_lstm(X_train_seq, y_train, LSTMTrainConfig(max_epochs=50, patience=5)).scaler,
-         "config": {"seq_len": 24}}, X_test_seq) >= 0.5).astype(int), zero_division=0))}
+    # NOTE: previously this ablation called `train_lstm(...)` twice — once
+    # for `.model` and once for `.scaler` — wasting compute and risking
+    # subtle inconsistencies if the two trains diverged. The single train
+    # below keeps the model + scaler from one fitted artifact.
+    all_11_config = LSTMTrainConfig(max_epochs=50, patience=5)
+    try:
+        all_11_result = train_lstm(X_train_seq, y_train, all_11_config)
+        all_11_bundle = {
+            "model": all_11_result.model,
+            "scaler": all_11_result.scaler,
+            "config": {"seq_len": all_11_config.seq_len},
+        }
+        all_11_proba = predict_proba_lstm(all_11_bundle, X_test_seq)
+        all_11_preds = (all_11_proba >= 0.5).astype(int)
+        all_11_metrics = _compute_classification_metrics(y_test, all_11_preds, all_11_proba)
+        feature_results["all_11"] = {
+            "f1": all_11_metrics["f1"],
+            "accuracy": all_11_metrics["accuracy"],
+        }
+    except Exception as exc:
+        logger.warning("Ablation all_11 failed: %s", exc)
+        feature_results["all_11"] = {"f1": 0.0, "accuracy": 0.0, "error": str(exc)}
 
     ablations["feature_subsets"] = feature_results
 

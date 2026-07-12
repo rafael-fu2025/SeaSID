@@ -35,6 +35,10 @@ class ForecastResponse(BaseModel):
     hours: list[ForecastHour]
     optimal_window: OptimalWindow | None = None
     ml_bundle_loaded: bool = False
+    # Optional AQICN snapshot — present only when the site has live air data.
+    # Without this field Pydantic would silently drop the value assigned in
+    # `services.get_forecast()`, leaving air-quality consumers in the dark.
+    air: dict | None = None
 
 
 # ── Sites ──────────────────────────────────────────────────────────────────

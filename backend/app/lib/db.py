@@ -184,6 +184,16 @@ class OperatorVerification(Base):
     comments = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # One verification per (site, date, operator). NULL operators are treated
+    # as distinct by both SQLite and PostgreSQL, so anonymous submissions do
+    # not collide with each other.
+    __table_args__ = (
+        UniqueConstraint(
+            "site_key", "date", "operator",
+            name="uq_opver_site_date_operator",
+        ),
+    )
+
 
 class Alert(Base):
     """Alert history for in-app banner and idempotency."""

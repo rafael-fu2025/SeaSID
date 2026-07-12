@@ -170,6 +170,7 @@ def forecast(site: str = Query(..., description="Site key")):
             hours=result["hours"],
             optimal_window=optimal,
             ml_bundle_loaded=bool(result.get("ml_bundle_loaded", True)),
+            air=result.get("air"),
         )
     except Exception as exc:
         logger.error("Forecast error: %s", exc)

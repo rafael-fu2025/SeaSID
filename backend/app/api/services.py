@@ -26,7 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 def _latest_air_snapshot(site_key: str) -> dict | None:
-    """Most recent air_quality_obs row for a site, or None."""
+    """Most recent air_quality_obs row for a site, or None.
+
+    Returns None when the site has ``air_provider_disabled=True`` so that
+    deployments without a nearby AQICN station never expose a stale or
+    misleading air block. The dormant-path issue (roadmap item 15) is
+    resolved by treating the flag as authoritative: ingest already skips
+    these sites, and now the forecast side does too.
+    """
+    site = get_site(site_key)
+    if site is not None and site.get("air_provider_disabled"):
+        return None
+
     session = db.SessionLocal()
     try:
         row = (
