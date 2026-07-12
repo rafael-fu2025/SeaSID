@@ -365,7 +365,7 @@ def experiment_results():
 def run_experiments():
     """Trigger the experiment suite (may take several minutes)."""
     try:
-        from datetime import datetime, timezone
+        from datetime import date, datetime, timezone
         import numpy as np
         import pandas as pd
 
@@ -388,6 +388,8 @@ def run_experiments():
             )
 
         X_rows, y_vals, X_seqs = [], [], []
+        label_dates: list[date] = []
+        label_site_keys: list[str] = []
         for lbl in labels:
             target_ts = datetime(
                 lbl.date.year, lbl.date.month, lbl.date.day,
@@ -399,6 +401,8 @@ def run_experiments():
                 seq = build_sequence(lbl.site_key, target_ts, window_hours=24)
                 X_seqs.append(seq)
                 y_vals.append(label_to_binary(lbl.label))
+                label_dates.append(lbl.date)
+                label_site_keys.append(lbl.site_key)
             except Exception:
                 continue
 
@@ -407,7 +411,11 @@ def run_experiments():
         X_seq = np.array(X_seqs, dtype=np.float32)
         y_arr = np.array(y_vals, dtype=np.float32)
 
-        results = run_full_experiment_suite(X_flat, y, X_seq, y_arr)
+        results = run_full_experiment_suite(
+            X_flat, y, X_seq, y_arr,
+            label_dates=label_dates,
+            label_site_keys=label_site_keys,
+        )
 
         # Reload the cached ML bundle so the next /forecast hits fresh weights.
         try:
