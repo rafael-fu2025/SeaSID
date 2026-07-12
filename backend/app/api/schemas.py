@@ -39,6 +39,16 @@ class ForecastResponse(BaseModel):
     # Without this field Pydantic would silently drop the value assigned in
     # `services.get_forecast()`, leaving air-quality consumers in the dark.
     air: dict | None = None
+    # ── Freshness + provenance (roadmap #8) ───────────────────────────
+    # When the data feeding the forecast was last refreshed, per-source
+    # freshness descriptors, the model version that produced the scores,
+    # and the active provider identities. Lets the UI answer "how old is
+    # this?", "which source supplied it?", and "what is missing?".
+    data_as_of: str | None = None
+    freshness: list[dict] = []
+    model_version: str = "unknown"
+    providers: dict[str, str] = {}
+    degraded: list[str] = []
 
 
 # ── Sites ──────────────────────────────────────────────────────────────────

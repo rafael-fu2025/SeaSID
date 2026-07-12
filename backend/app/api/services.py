@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone, date as date_type
 
 from app.lib import db
 from app.lib.features import build_features, build_features_for_window, FEATURE_COLUMNS
+from app.lib.freshness import compute_freshness, model_version
+from app.lib.providers import active_providers
 from app.lib.scoring import (
     score_hour,
     risk_label,
@@ -119,12 +121,57 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     # without AQICN_API_KEY still get a clean forecast response.
     air = _latest_air_snapshot(site_key)
 
+    # ── Freshness + provenance (roadmap #8) ───────────────────────────
+    # Resolve active providers once per request and reuse the names for
+    # both the ``providers`` map and the freshness descriptors.
+    try:
+        providers_info = active_providers()
+        providers_map: dict[str, str] = {
+            role: info.name for role, info in providers_info.items()
+        }
+    except Exception as exc:
+        logger.warning("active_providers() failed: %s — emitting empty map", exc)
+        providers_map = {}
+
+    try:
+        freshness_list = compute_freshness(site_key, providers_map, now=now)
+    except Exception as exc:
+        logger.warning("compute_freshness() failed for %s: %s", site_key, exc)
+        freshness_list = []
+
+    # Derive human-readable "data is stale/missing" reasons. This is what
+    # the UI renders in the degraded chip — never empty unless everything
+    # is live.
+    degraded = [
+        f"{f.source} is {f.status}"
+        for f in freshness_list
+        if f.status in ("stale", "unavailable")
+    ]
+
+    # data_as_of is the most-recent observation across the live sources;
+    # falls back to ``generated_at`` when no source has data.
+    live_tses = [
+        f.last_observed_at
+        for f in freshness_list
+        if f.status == "live" and f.last_observed_at is not None
+    ]
+    if live_tses:
+        data_as_of = max(live_tses).isoformat()
+    else:
+        data_as_of = now.isoformat()
+
     out = {
         "site_key": site_key,
         "site_name": site["name"],
         "generated_at": now.isoformat(),
         "hours": forecast_hours,
         "optimal_window": optimal,
+        # Roadmap #8 fields
+        "data_as_of": data_as_of,
+        "freshness": [f.to_dict() for f in freshness_list],
+        "model_version": model_version(bundle),
+        "providers": providers_map,
+        "degraded": degraded,
     }
     if air is not None:
         out["air"] = air

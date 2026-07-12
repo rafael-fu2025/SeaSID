@@ -1,5 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { ProbabilityMeter, RiskBadge } from './RiskBadge';
+import { FreshnessBadge } from './FreshnessBadge';
 import { cn } from '@/lib/utils';
 
 const fmtTime = (iso) =>
@@ -16,8 +17,11 @@ const fmtTime = (iso) =>
  *
  * Optimal cards get a left reef-accent ring via a data attribute so
  * callers can highlight specific hours without touching the card.
+ *
+ * Accepts an optional ``freshness`` descriptor (roadmap #8) so each
+ * hour card can surface the source-data status that produced it.
  */
-export default function ForecastCard({ hour, isOptimal = false }) {
+export default function ForecastCard({ hour, isOptimal = false, freshness }) {
   if (!hour) return null;
   const pBad = Number.isFinite(hour.p_bad) ? hour.p_bad : 0;
 
@@ -40,6 +44,12 @@ export default function ForecastCard({ hour, isOptimal = false }) {
       <div className="text-xs text-foreground">{hour.viz_label ?? '—'}</div>
 
       <ProbabilityMeter value={pBad} label="P(no-go)" />
+
+      {freshness && (
+        <div className="pt-1">
+          <FreshnessBadge descriptor={freshness} />
+        </div>
+      )}
     </Card>
   );
 }

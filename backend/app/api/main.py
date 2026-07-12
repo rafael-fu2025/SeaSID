@@ -171,6 +171,12 @@ def forecast(site: str = Query(..., description="Site key")):
             optimal_window=optimal,
             ml_bundle_loaded=bool(result.get("ml_bundle_loaded", True)),
             air=result.get("air"),
+            # Roadmap #8 freshness + provenance
+            data_as_of=result.get("data_as_of"),
+            freshness=result.get("freshness", []),
+            model_version=result.get("model_version", "unknown"),
+            providers=result.get("providers", {}),
+            degraded=result.get("degraded", []),
         )
     except Exception as exc:
         logger.error("Forecast error: %s", exc)
