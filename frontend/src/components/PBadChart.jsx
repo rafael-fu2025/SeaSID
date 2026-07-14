@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Activity } from 'lucide-react';
 
 /**
- * PBadChart — 12-hour probability-of-no-go line chart.
+ * PBadChart — probability-of-no-go line chart for a variable horizon.
  *
  * Pure SVG (no charting library). Renders:
  *  - 0.60 / 0.30 threshold grid (no-go / caution bands)
@@ -28,13 +28,14 @@ const fmtTime = (iso) =>
 
 function PBadChart({ hours = [], optimalIso }) {
   const data = useMemo(() => buildSeries(hours, optimalIso), [hours, optimalIso]);
+  const horizon = hours.length;
 
   return (
     <Card className="rounded-md" data-testid="pbad-chart">
       <CardHeader className="pb-1">
         <CardTitle className="flex items-center gap-2 text-sm">
           <Activity className="size-4 text-reef" />
-          Probability of no-go · 12 hours
+          Probability of no-go · {horizon} hours
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -49,7 +50,7 @@ function PBadChart({ hours = [], optimalIso }) {
               data-testid="pbad-chart-svg"
               className="h-44 w-full"
               role="img"
-              aria-label="12-hour P(no-go) chart"
+              aria-label={`${horizon}-hour P(no-go) chart`}
             >
               {/* Threshold bands */}
               <rect
@@ -169,8 +170,9 @@ function buildSeries(hours, optimalIso) {
     const y = MARGIN.top + (1 - (h.p_bad ?? 0)) * PLOT_H;
     return { x, y, isOptimal: optimalIso && h.ts === optimalIso, h };
   });
+  const labelInterval = n > 24 ? 6 : 3;
   const xLabels = hours
-    .filter((_, i) => i % 3 === 0 || i === hours.length - 1)
+    .filter((_, i) => i % labelInterval === 0 || i === hours.length - 1)
     .map((h, idx) => {
       const i = hours.indexOf(h);
       return {
