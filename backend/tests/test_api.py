@@ -75,6 +75,33 @@ class TestForecastEndpoint:
             response = await ac.get("/api/v1/forecast?site=nonexistent")
         assert response.status_code == 404
 
+    async def test_forecast_accepts_horizon(self, monkeypatch):
+        from app.api import main as api_main
+
+        captured = {}
+
+        def fake_get_forecast(site_key, hours=48):
+            captured.update(site_key=site_key, hours=hours)
+            return {
+                "site_key": site_key,
+                "site_name": "Dauin Muck",
+                "generated_at": "2026-07-15T00:00:00+00:00",
+                "hours": [],
+                "optimal_window": None,
+            }
+
+        monkeypatch.setattr(api_main, "get_forecast", fake_get_forecast)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/api/v1/forecast?site=dauin_muck&hours=24")
+
+        assert response.status_code == 200
+        assert captured == {"site_key": "dauin_muck", "hours": 24}
+
+    async def test_forecast_rejects_horizon_above_48(self):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/api/v1/forecast?site=dauin_muck&hours=49")
+        assert response.status_code == 422
+
 
 @pytest.mark.asyncio
 class TestVerifyEndpoint:

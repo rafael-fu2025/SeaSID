@@ -6,12 +6,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart } from '@/components/Skeleton';
-import ForecastCard from '@/components/ForecastCard';
+import ForecastTimeline from '@/components/ForecastTimeline';
 import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
 import { ForecastProvenance } from '@/components/ForecastProvenance';
 import ActiveLearningNudge from '@/components/ActiveLearningNudge';
+import ForecastHorizonSelector from '@/components/ForecastHorizonSelector';
 import { cn } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
@@ -36,7 +37,7 @@ const fmtTimeFull = (iso) =>
  *
  *  - Picker row at top: site selector + refresh button.
  *  - KPI strip: visibility, current risk, P(no-go), AQI, model in use.
- *  - 12-hour timeline grid (ForecastCard × 12).
+ *  - Selectable 12/24/48-hour timeline grouped into daily rows.
  *  - Probability chart with optimal-window marker.
  *  - Optimal-window summary card with P(no-go) + time + viz.
  *  - Active alert banner.
@@ -51,6 +52,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [horizon, setHorizon] = useState(12);
   const cancelRef = useRef(false);
 
   const load = useCallback(async (siteKey) => {
@@ -58,7 +60,7 @@ export default function Dashboard() {
     setError(null);
     try {
       const [fc, al] = await Promise.all([
-        api.getForecast(siteKey),
+        api.getForecast(siteKey, 48),
         api.getAlerts(siteKey),
       ]);
       if (cancelRef.current) return;
@@ -94,8 +96,10 @@ export default function Dashboard() {
   };
 
   const currentHour = forecast?.hours?.[0];
-  const next12 = forecast?.hours?.slice(0, 12) || [];
-  const optimal = forecast?.optimal_window;
+  const visibleHours = forecast?.hours?.slice(0, horizon) || [];
+  const optimal = visibleHours.length
+    ? visibleHours.reduce((best, hour) => hour.p_bad < best.p_bad ? hour : best)
+    : null;
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
@@ -187,7 +191,7 @@ export default function Dashboard() {
       {loading && !forecast && (
         <div className="flex flex-col gap-6">
           <SkeletonKpiStrip count={5} />
-          <SkeletonForecastGrid count={12} />
+          <SkeletonForecastGrid count={horizon} />
           <SkeletonChart />
         </div>
       )}
@@ -271,42 +275,37 @@ export default function Dashboard() {
       )}
 
       {/* Timeline */}
-      {!loading && next12.length > 0 && (
+      {!loading && visibleHours.length > 0 && (
         <section aria-labelledby="timeline-heading">
           <header className="mb-3 flex items-end justify-between">
             <div>
               <h2 id="timeline-heading" className="text-base font-semibold tracking-tight">
-                12-hour forecast
+                {horizon}-hour forecast
               </h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 Each hour is a single forecast card with risk badge and probability meter.
               </p>
             </div>
-            {optimal && (
-              <Badge variant="secondary" className="font-mono">
-                <Sparkles className="mr-1 size-3 text-positive" />
-                Optimal at{' '}
-                {new Date(optimal.ts).toLocaleTimeString([], {
-                  hour: '2-digit', minute: '2-digit', hour12: false,
-                })}
-              </Badge>
-            )}
+            <div className="flex flex-col items-end gap-2">
+              <ForecastHorizonSelector value={horizon} onChange={setHorizon} />
+              {optimal && (
+                <Badge variant="secondary" className="font-mono">
+                  <Sparkles className="mr-1 size-3 text-positive" />
+                  Optimal at{' '}
+                  {new Date(optimal.ts).toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit', hour12: false,
+                  })}
+                </Badge>
+              )}
+            </div>
           </header>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {next12.map((hour) => (
-              <ForecastCard
-                key={hour.ts}
-                hour={hour}
-                isOptimal={optimal?.ts === hour.ts}
-              />
-            ))}
-          </div>
+          <ForecastTimeline hours={visibleHours} optimalIso={optimal?.ts} />
         </section>
       )}
 
       {/* Probability chart */}
-      {!loading && next12.length > 0 && (
-        <PBadChart hours={next12} optimalIso={optimal?.ts} />
+      {!loading && visibleHours.length > 0 && (
+        <PBadChart hours={visibleHours} optimalIso={optimal?.ts} />
       )}
 
       {/* Optimal window summary */}
@@ -315,7 +314,7 @@ export default function Dashboard() {
           <header className="mb-3">
             <h2 className="text-base font-semibold tracking-tight">Optimal dive window</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              The hour in the next 12 with the lowest no-go probability.
+              The hour in the next {horizon} with the lowest no-go probability.
             </p>
           </header>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

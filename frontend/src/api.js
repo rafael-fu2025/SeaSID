@@ -88,7 +88,10 @@ export const api = {
   getSites: () => request('/api/v1/sites'),
 
   // Forecast
-  getForecast: (siteKey) => request(`/api/v1/forecast?site=${siteKey}`),
+  getForecast: (siteKey, hours = 48) => {
+    const params = new URLSearchParams({ site: siteKey, hours: String(hours) });
+    return request(`/api/v1/forecast?${params}`);
+  },
 
   // Labels
   getLabels: (siteKey = 'all', limit = 50) =>

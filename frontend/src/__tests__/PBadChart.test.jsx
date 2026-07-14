@@ -37,4 +37,10 @@ describe('PBadChart', () => {
     render(<PBadChart hours={[]} />);
     expect(screen.getByText(/no forecast data/i)).toBeInTheDocument();
   });
+
+  it('labels the chart using the supplied horizon', () => {
+    render(<PBadChart hours={HOURS} />);
+    expect(screen.getByText(/probability of no-go · 6 hours/i)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '6-hour P(no-go) chart' })).toBeInTheDocument();
+  });
 });

@@ -94,6 +94,28 @@ def test_open_meteo_weather_is_default(monkeypatch):
     assert a is None
 
 
+@pytest.mark.parametrize("provider_class", ["weather", "marine"])
+def test_open_meteo_fetches_full_future_horizon(monkeypatch, provider_class):
+    """A 48-hour request must not collapse to one future hour."""
+    from app.lib.providers import open_meteo
+
+    captured = {}
+
+    def fake_fetch_forecast(lat, lon, *, past_hours, forecast_hours):
+        captured.update(past_hours=past_hours, forecast_hours=forecast_hours)
+        return []
+
+    monkeypatch.setattr(open_meteo, "fetch_forecast", fake_fetch_forecast)
+    cls = (
+        open_meteo.OpenMeteoWeatherProvider
+        if provider_class == "weather"
+        else open_meteo.OpenMeteoMarineProvider
+    )
+
+    assert cls().fetch_hourly(9.18, 123.27, hours=48) == []
+    assert captured == {"past_hours": 48, "forecast_hours": 48}
+
+
 def test_stormglass_provider_no_key_returns_empty(monkeypatch):
     """Storm Glass without an API key returns [] and logs a warning."""
     monkeypatch.setenv("SEASID_PROVIDER_MARINE", "stormglass")

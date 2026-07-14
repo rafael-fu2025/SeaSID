@@ -8,8 +8,16 @@ const fmtTime = (iso) =>
     hour: '2-digit', minute: '2-digit', hour12: false,
   });
 
+const fmtPeriod = (iso) => {
+  const hour = new Date(iso).getHours();
+  if (hour < 6) return 'Early morning';
+  if (hour < 12) return 'Morning';
+  if (hour < 18) return 'Afternoon';
+  return 'Evening';
+};
+
 /**
- * ForecastCard — single hour of the 12-hour forecast.
+ * ForecastCard — a single hour within the selected forecast horizon.
  *
  * Replaces the legacy plain-CSS `.hour-card` with shadcn's Card
  * primitive. Carries the same information (time, viz, P(no-go), risk)
@@ -34,10 +42,15 @@ export default function ForecastCard({ hour, isOptimal = false, freshness }) {
         isOptimal && 'border-reef/60 ring-1 ring-reef/30',
       )}
     >
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-xs text-muted-foreground">
-          {fmtTime(hour.ts)}
-        </span>
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="font-mono text-base font-semibold tabular-nums text-foreground">
+            {fmtTime(hour.ts)}
+          </div>
+          <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {fmtPeriod(hour.ts)}
+          </div>
+        </div>
         <RiskBadge risk={hour.current_risk} />
       </div>
 

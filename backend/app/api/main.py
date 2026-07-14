@@ -156,13 +156,16 @@ def list_sites():
 # ── Forecast ───────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/forecast", response_model=ForecastResponse)
-def forecast(site: str = Query(..., description="Site key")):
-    """Get 48-hour forecast for a dive site (read-only, no side effects)."""
+def forecast(
+    site: str = Query(..., description="Site key"),
+    hours: int = Query(default=48, ge=1, le=48, description="Forecast horizon in hours"),
+):
+    """Get a 1–48-hour forecast for a dive site (read-only, no side effects)."""
     if site not in site_keys():
         raise HTTPException(status_code=404, detail=f"Unknown site: {site}. Valid: {site_keys()}")
 
     try:
-        result = get_forecast(site)
+        result = get_forecast(site, hours=hours)
         # Re-shape to include the typed OptimalWindow block.
         opt = result.get("optimal_window")
         optimal = OptimalWindow(

@@ -9,6 +9,7 @@ import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
 import MarkdownResponse from '@/components/MarkdownResponse';
+import ForecastHorizonSelector from '@/components/ForecastHorizonSelector';
 
 const METRIC_DEFS = [
   { key: 'precip_24h_mm',    label: 'Precip · 24h',  unit: 'mm' },
@@ -31,9 +32,7 @@ const fmt = (v, unit) => {
  *  - Site selector + refresh button in the header.
  *  - Two-column layout: briefing (MarkdownResponse) on the left,
  *    live feature snapshot + overall risk on the right.
- *  - Bottom strip: P(no-go) chart over the next 12 hours (so the
- *    optimal-window marker from the briefing aligns visually with
- *    the Dashboard's chart).
+ *  - Bottom strip: selectable 12/24/48-hour P(no-go) chart.
  *  - Listens for the global "seasid:refresh" event.
  */
 export default function Forecast() {
@@ -41,6 +40,7 @@ export default function Forecast() {
   const [briefing, setBriefing] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [horizon, setHorizon] = useState(12);
   const [error, setError] = useState(null);
   const cancelRef = useRef(false);
 
@@ -80,8 +80,10 @@ export default function Forecast() {
   const fc = briefing?.tool_calls?.find((t) => t.name === 'get_forecast');
   const wt = briefing?.tool_calls?.find((t) => t.name === 'get_weather');
   const parsed = parseForecast(fc);
-  const optimal = parsed.optimal_window;
-  const next12 = (parsed.hours || []).slice(0, 12);
+  const visibleHours = (parsed.hours || []).slice(0, horizon);
+  const optimal = visibleHours.length
+    ? visibleHours.reduce((best, hour) => hour.p_bad < best.p_bad ? hour : best)
+    : null;
 
   return (
     <div className="flex flex-col gap-6 p-6 lg:p-8">
@@ -203,8 +205,13 @@ export default function Forecast() {
             </Card>
           </div>
 
-          {next12.length > 0 && (
-            <PBadChart hours={next12} optimalIso={optimal?.ts} />
+          {visibleHours.length > 0 && (
+            <section className="flex flex-col gap-3">
+              <div className="flex justify-end">
+                <ForecastHorizonSelector value={horizon} onChange={setHorizon} />
+              </div>
+              <PBadChart hours={visibleHours} optimalIso={optimal?.ts} />
+            </section>
           )}
         </>
       )}
