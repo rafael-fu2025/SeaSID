@@ -10,6 +10,8 @@ import ForecastCard from '@/components/ForecastCard';
 import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
+import { ForecastProvenance } from '@/components/ForecastProvenance';
+import ActiveLearningNudge from '@/components/ActiveLearningNudge';
 import { cn } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
@@ -171,6 +173,16 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* Phase 8: Active-learning nudge — surfaces past dates where the
+          model was uncertain (p_bad in [0.35, 0.65]) and an operator
+          confirmation would teach the most. */}
+      {!loading && selectedSite && (
+        <ActiveLearningNudge
+          siteKey={selectedSite}
+          onVerified={() => load(selectedSite)}
+        />
+      )}
+
       {/* Loading skeletons */}
       {loading && !forecast && (
         <div className="flex flex-col gap-6">
@@ -236,13 +248,26 @@ export default function Dashboard() {
             label="Model in use"
             value={
               <span className="text-base font-medium text-foreground">
-                {currentHour.model_used ?? '—'}
+                {forecast?.model_version ?? currentHour.model_used ?? '—'}
               </span>
             }
             sub={forecast?.ml_bundle_loaded ? 'Bundle loaded' : 'Heuristic fallback'}
             Icon={Thermometer}
           />
         </section>
+      )}
+
+      {/* Provenance strip (roadmap #8) — answers "how old?", "which source?",
+          "which model?" from the same screen as the KPIs. */}
+      {!loading && forecast && (
+        <ForecastProvenance
+          dataAsOf={forecast.data_as_of}
+          freshness={forecast.freshness}
+          providers={forecast.providers}
+          modelVersion={forecast.model_version}
+          generatedAt={forecast.generated_at}
+          compact
+        />
       )}
 
       {/* Timeline */}

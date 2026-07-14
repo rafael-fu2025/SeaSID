@@ -41,6 +41,23 @@ const VERDICTS = [
 
 const CURRENTS = ['Low', 'Moderate', 'High'];
 
+// Phase 5: structured reason + operator confidence. The reason tells the
+// trainer which physical driver mattered; the confidence is a self-reported
+// trust weight the trainer can use to up-weight high-quality labels.
+const NO_GO_REASONS = [
+  { value: 'viz',     label: 'Visibility' },
+  { value: 'current', label: 'Current' },
+  { value: 'swell',   label: 'Swell / waves' },
+  { value: 'weather', label: 'Weather (wind / rain)' },
+  { value: 'boat',    label: 'Boat / logistics' },
+  { value: 'other',   label: 'Other' },
+];
+const CONFIDENCE_LEVELS = [
+  { value: 'low',  label: 'Low — best guess' },
+  { value: 'med',  label: 'Medium — fairly sure' },
+  { value: 'high', label: 'High — eyewitness' },
+];
+
 const today = () => new Date().toISOString().split('T')[0];
 
 const EMPTY_FORM = () => ({
@@ -50,6 +67,8 @@ const EMPTY_FORM = () => ({
   verdict: 'dive',
   actual_viz_m: '',
   actual_current: 'Low',
+  no_go_reason: 'other',
+  confidence: 'med',
   comments: '',
 });
 
@@ -317,6 +336,51 @@ function NewObservationDialog({ open, onOpenChange, sites, onSubmitted }) {
             <p className="text-[11px] text-muted-foreground">0–50 meters.</p>
           </div>
 
+          {/* Phase 5: Reason + confidence. Only relevant when the trip wasn't
+              a clean "Dive" — we still show the fields so operators can
+              flag a partial-success reason + their confidence in any case. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="verify-reason" className="text-xs uppercase tracking-wider text-muted-foreground">
+                Main reason
+                {form.verdict === 'dive' && (
+                  <span className="ml-1 normal-case text-muted-foreground/60">(optional when verdict = Dive)</span>
+                )}
+              </Label>
+              <Select
+                value={form.no_go_reason}
+                onValueChange={(v) => set('no_go_reason', v)}
+              >
+                <SelectTrigger id="verify-reason">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {NO_GO_REASONS.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="verify-confidence" className="text-xs uppercase tracking-wider text-muted-foreground">
+                Confidence
+              </Label>
+              <Select
+                value={form.confidence}
+                onValueChange={(v) => set('confidence', v)}
+              >
+                <SelectTrigger id="verify-confidence">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CONFIDENCE_LEVELS.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           {/* Comments */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="verify-comments" className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -436,6 +500,8 @@ function RecentObservationsTable({ recentLabels }) {
               <TableHead>Date</TableHead>
               <TableHead>Site</TableHead>
               <TableHead>Verdict</TableHead>
+              <TableHead>Reason</TableHead>
+              <TableHead>Conf.</TableHead>
               <TableHead className="text-right">Viz (m)</TableHead>
               <TableHead>Source</TableHead>
             </TableRow>
@@ -449,6 +515,12 @@ function RecentObservationsTable({ recentLabels }) {
                 </TableCell>
                 <TableCell>
                   <VerdictPill value={lbl.label} />
+                </TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {lbl.no_go_reason || '—'}
+                </TableCell>
+                <TableCell>
+                  <ConfidencePill value={lbl.confidence} />
                 </TableCell>
                 <TableCell className="font-mono text-right text-xs">
                   {lbl.actual_viz_m ?? '—'}
@@ -484,6 +556,31 @@ function VerdictPill({ value }) {
       )}
     >
       {value}
+    </Badge>
+  );
+}
+
+/* ConfidencePill — Phase 5 visual indicator so operators can see which
+   recent observations were high-confidence (eyewitness) vs guesses. */
+function ConfidencePill({ value }) {
+  const v = String(value || '').toLowerCase();
+  if (!v) return <span className="text-xs text-muted-foreground">—</span>;
+  const tone =
+    v === 'high' ? 'positive' :
+    v === 'med'  ? 'muted'    :
+    v === 'low'  ? 'warning'  :
+    'muted';
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        'font-mono text-[10px] uppercase tracking-wider',
+        tone === 'positive' && 'border-positive/40 text-positive',
+        tone === 'warning'  && 'border-warning/40 text-warning',
+        tone === 'muted'    && 'border-border text-muted-foreground',
+      )}
+    >
+      {v}
     </Badge>
   );
 }

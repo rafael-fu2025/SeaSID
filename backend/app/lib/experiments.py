@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,6 @@ from sklearn.metrics import (
     confusion_matrix,
     roc_curve,
 )
-from sklearn.model_selection import train_test_split
 
 from app.lib.features import FEATURE_COLUMNS
 from app.lib.scoring import score_hour, risk_label, label_to_binary, features_dict_from_row
@@ -37,21 +37,133 @@ RESULTS_PATH = DATA_DIR / "experiment_results.json"
 
 METRICS_LIST = ["accuracy", "precision", "recall", "f1", "auc_roc"]
 
+# Default sequence lookback — gap between train and val/test must be at least
+# this many days to prevent temporal context leakage for the LSTM.
+DEFAULT_SEQ_LEN_HOURS = 24
+
+
+def _per_site_test_counts(
+    site_keys: Sequence[str],
+    test_idx: Sequence[int],
+) -> dict[str, int]:
+    """Count how many test labels belong to each site.
+
+    Used to surface per-site representation in the experiment report so
+    reviewers can see whether the time-aware test set is balanced across
+    sites. Roadmap #7 recommends reporting results separately by site.
+    """
+    counts: dict[str, int] = {}
+    for i in test_idx:
+        key = site_keys[i]
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _time_aware_split(
+    label_dates: Sequence[date],
+    train_frac: float = 0.70,
+    val_frac: float = 0.15,
+    purge_days: int = 1,
+) -> tuple[list[int], list[int], list[int], dict]:
+    """Time-aware train/val/test split for forecasting labels.
+
+    Addresses roadmap item #7: random splitting inflates apparent model
+    performance because neighbouring hourly observations share temporal
+    context. This implementation:
+
+    * Sorts all labels by ``label_dates`` so the oldest data is used for
+      training and the newest is held out as the test set.
+    * Slices contiguous blocks at ``train_frac`` and ``train_frac+val_frac``.
+    * Applies a purge: any train label whose date falls within
+      ``purge_days`` of the earliest val date is removed from the train
+      set, closing the temporal-context leak between adjacent windows.
+
+    Returns ``(train_idx, val_idx, test_idx, boundaries)`` where
+    ``boundaries`` records date ranges, counts, the split method, and the
+    purge window used.
+    """
+    n = len(label_dates)
+    if n == 0:
+        return [], [], [], {"split_method": "time_aware_blocked", "n_samples": 0}
+    if n < 3:
+        # Too small for a meaningful 3-way split — put everything in train.
+        return list(range(n)), [], [], {
+            "split_method": "time_aware_blocked",
+            "n_samples": n,
+            "warning": "dataset too small for 3-way split; everything in train",
+        }
+
+    # Stable sort so ties (same date) preserve original insertion order.
+    order = sorted(range(n), key=lambda i: (label_dates[i], i))
+    sorted_dates = [label_dates[i] for i in order]
+
+    train_end = max(1, int(round(n * train_frac)))
+    val_end = max(train_end + 1, int(round(n * (train_frac + val_frac))))
+    val_end = min(val_end, n - 1)  # leave at least one row for test
+
+    train_order = list(order[:train_end])
+    val_order = list(order[train_end:val_end])
+    test_order = list(order[val_end:])
+
+    # Purge: drop train labels within `purge_days` of the earliest val date
+    # so the model cannot peek at temporally-adjacent context. Pydantic
+    # schemas serialize ``date`` objects as ISO strings — convert eagerly.
+    if val_order and purge_days > 0:
+        val_start = min(label_dates[i] for i in val_order)
+        kept_train = [
+            i for i in train_order
+            if (val_start - label_dates[i]).days > purge_days
+        ]
+        dropped = len(train_order) - len(kept_train)
+        if dropped:
+            logger.info(
+                "Purged %d train labels within %d day(s) of val boundary %s",
+                dropped, purge_days, val_start,
+            )
+        train_order = kept_train
+
+    def _window(indices: list[int]) -> dict:
+        if not indices:
+            return {"start": None, "end": None, "count": 0}
+        dates = [label_dates[i] for i in indices]
+        return {
+            "start": min(dates).isoformat(),
+            "end": max(dates).isoformat(),
+            "count": len(indices),
+        }
+
+    boundaries = {
+        "split_method": "time_aware_blocked",
+        "purge_days": purge_days,
+        "n_samples": n,
+        "train": _window(train_order),
+        "val": _window(val_order),
+        "test": _window(test_order),
+    }
+
+    return train_order, val_order, test_order, boundaries
+
 
 def run_full_experiment_suite(
     X_flat: pd.DataFrame,
     y: pd.Series,
     X_seq: np.ndarray,
     y_arr: np.ndarray,
+    label_dates: Sequence[date] | None = None,
+    label_site_keys: Sequence[str] | None = None,
 ) -> dict:
     """
     Run the complete experiment suite:
-    1. Split data (70/15/15, stratified, fixed seed=42)
+    1. Split data (70/15/15, time-aware blocked when dates are supplied)
     2. Train all models on training set
     3. Evaluate all models on test set
     4. Run ablation studies
     5. Generate plots
     6. Save results
+
+    When ``label_dates`` is provided, the split is time-aware (see
+    :func:`_time_aware_split`). Otherwise the legacy random stratified
+    split is used so unit tests that fabricate indices stay deterministic.
     """
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -61,20 +173,45 @@ def run_full_experiment_suite(
     print(f"Running experiments on {n_total} samples...")
 
     # ── 1. Split data ──────────────────────────────────────────────────
-    # First split: 70% train, 30% temp
-    X_train_f, X_temp_f, y_train, y_temp = train_test_split(
-        X_flat, y, test_size=0.30, random_state=42, stratify=y,
-    )
-    # Second split: 50/50 of temp → 15% val, 15% test
-    X_val_f, X_test_f, y_val, y_test = train_test_split(
-        X_temp_f, y_temp, test_size=0.50, random_state=42, stratify=y_temp,
-    )
+    if label_dates is not None and len(label_dates) == n_total:
+        # Time-aware blocked split (roadmap item #7).
+        train_idx_list, val_idx_list, test_idx_list, boundaries = _time_aware_split(
+            list(label_dates),
+        )
+        train_idx = np.array(train_idx_list)
+        val_idx = np.array(val_idx_list)
+        test_idx = np.array(test_idx_list)
+        split_method = boundaries.get("split_method", "time_aware_blocked")
+    else:
+        # Legacy fallback: random stratified split. Preserved for unit
+        # tests that build synthetic arrays without label metadata.
+        from sklearn.model_selection import train_test_split
+        X_train_f, X_temp_f, y_train, y_temp = train_test_split(
+            X_flat, y, test_size=0.30, random_state=42, stratify=y,
+        )
+        X_val_f, X_test_f, y_val, y_test = train_test_split(
+            X_temp_f, y_temp, test_size=0.50, random_state=42, stratify=y_temp,
+        )
+        train_idx = X_train_f.index.values
+        val_idx = X_val_f.index.values
+        test_idx = X_test_f.index.values
+        boundaries = {
+            "split_method": "random_stratified",
+            "n_samples": n_total,
+            "train": {"start": None, "end": None, "count": len(train_idx)},
+            "val": {"start": None, "end": None, "count": len(val_idx)},
+            "test": {"start": None, "end": None, "count": len(test_idx)},
+        }
+        split_method = "random_stratified"
+
+    X_train_f = X_flat.iloc[train_idx]
+    X_val_f = X_flat.iloc[val_idx]
+    X_test_f = X_flat.iloc[test_idx]
+    y_train = y.iloc[train_idx]
+    y_val = y.iloc[val_idx]
+    y_test = y.iloc[test_idx]
 
     # Same splits for sequences
-    train_idx = X_train_f.index.values
-    val_idx = X_val_f.index.values
-    test_idx = X_test_f.index.values
-
     X_train_seq = X_seq[train_idx]
     X_val_seq = X_seq[val_idx]
     X_test_seq = X_seq[test_idx]
@@ -84,11 +221,21 @@ def run_full_experiment_suite(
 
     dataset_summary = {
         "total_samples": n_total,
-        "train_size": len(X_train_f),
-        "val_size": len(X_val_f),
-        "test_size": len(X_test_f),
+        "train_size": len(train_idx),
+        "val_size": len(val_idx),
+        "test_size": len(test_idx),
         "positive_ratio": float(y.mean()),
+        "split_method": split_method,
+        "boundaries": boundaries,
     }
+
+    # Per-site metrics (roadmap #7: "report results separately by site").
+    # Computed against the time-aware test set so the per-site numbers
+    # never include temporal leakage from training.
+    if label_site_keys is not None and len(label_site_keys) == n_total:
+        dataset_summary["per_site"] = _per_site_test_counts(
+            list(label_site_keys), test_idx,
+        )
 
     print(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
 
@@ -329,10 +476,28 @@ def _run_ablations(
     except Exception as exc:
         feature_results["weather_only_7"] = {"f1": 0.0, "error": str(exc)}
 
-    feature_results["all_11"] = {"f1": float(f1_score(y_test, (predict_proba_lstm(
-        {"model": train_lstm(X_train_seq, y_train, LSTMTrainConfig(max_epochs=50, patience=5)).model,
-         "scaler": train_lstm(X_train_seq, y_train, LSTMTrainConfig(max_epochs=50, patience=5)).scaler,
-         "config": {"seq_len": 24}}, X_test_seq) >= 0.5).astype(int), zero_division=0))}
+    # NOTE: previously this ablation called `train_lstm(...)` twice — once
+    # for `.model` and once for `.scaler` — wasting compute and risking
+    # subtle inconsistencies if the two trains diverged. The single train
+    # below keeps the model + scaler from one fitted artifact.
+    all_11_config = LSTMTrainConfig(max_epochs=50, patience=5)
+    try:
+        all_11_result = train_lstm(X_train_seq, y_train, all_11_config)
+        all_11_bundle = {
+            "model": all_11_result.model,
+            "scaler": all_11_result.scaler,
+            "config": {"seq_len": all_11_config.seq_len},
+        }
+        all_11_proba = predict_proba_lstm(all_11_bundle, X_test_seq)
+        all_11_preds = (all_11_proba >= 0.5).astype(int)
+        all_11_metrics = _compute_classification_metrics(y_test, all_11_preds, all_11_proba)
+        feature_results["all_11"] = {
+            "f1": all_11_metrics["f1"],
+            "accuracy": all_11_metrics["accuracy"],
+        }
+    except Exception as exc:
+        logger.warning("Ablation all_11 failed: %s", exc)
+        feature_results["all_11"] = {"f1": 0.0, "accuracy": 0.0, "error": str(exc)}
 
     ablations["feature_subsets"] = feature_results
 

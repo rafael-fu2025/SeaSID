@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { RiskBadge } from '@/components/RiskBadge';
+import { FreshnessStack } from '@/components/FreshnessBadge';
+import { ForecastProvenance } from '@/components/ForecastProvenance';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
@@ -170,6 +172,19 @@ export default function MapPage() {
           Geographic view of every dive site on OpenStreetMap, with a P(no-go) heat-radius overlay.
         </p>
       </header>
+
+      {/* Provenance strip — same data_as_of as the Dashboard so the two
+          screens agree (roadmap #8 acceptance criterion). */}
+      {Object.values(forecasts).filter(Boolean)[0] && (
+        <ForecastProvenance
+          dataAsOf={Object.values(forecasts).filter(Boolean)[0].data_as_of}
+          freshness={Object.values(forecasts).filter(Boolean)[0].freshness}
+          providers={Object.values(forecasts).filter(Boolean)[0].providers}
+          modelVersion={Object.values(forecasts).filter(Boolean)[0].model_version}
+          generatedAt={Object.values(forecasts).filter(Boolean)[0].generated_at}
+          compact
+        />
+      )}
 
       {error && (
         <Card className="border-danger/30 bg-danger/5">
@@ -342,6 +357,16 @@ function SiteTile({ site, forecast }) {
           <p className="mt-3 text-[11px] text-muted-foreground">
             Air quality data not configured for this site.
           </p>
+        )}
+
+        {/* Per-source freshness chips (roadmap #8) */}
+        {forecast?.freshness?.length > 0 && (
+          <div className="mt-3">
+            <FreshnessStack
+              freshness={forecast.freshness}
+              degradedReasons={forecast.degraded}
+            />
+          </div>
         )}
       </CardContent>
     </Card>

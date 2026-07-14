@@ -90,10 +90,29 @@ def train_xgb(X: pd.DataFrame, y: pd.Series) -> XGBTrainingResult:
             logger.warning("CV f1 failed: %s", exc)
             metrics["cv_f1"] = None
 
-        metrics["mode"] = "cv"
+        # Phase 3: AUC-ROC drives the tier gate (see model.py::load_best).
+        # When the dataset is too small or single-class, the AUC can be
+        # undefined — log None instead of raising.
+        if len(np.unique(y)) > 1:
+            try:
+                from sklearn.metrics import roc_auc_score
+                # Final fit on all data — used both for AUC reporting and
+                # for serialisation. CV above fitted internal scratch
+                # estimators that we discard; this is the production model.
+                clf.fit(X, y)
+                train_proba = clf.predict_proba(X)[:, 1]
+                metrics["auc_roc"] = float(roc_auc_score(y, train_proba))
+            except Exception as exc:
+                logger.warning("AUC-ROC failed: %s", exc)
+                metrics["auc_roc"] = None
+                # Even if AUC fails we still need to fit the model so
+                # serialisation works.
+                clf.fit(X, y)
+        else:
+            metrics["auc_roc"] = None
+            clf.fit(X, y)
 
-        # Final fit on all data
-        clf.fit(X, y)
+        metrics["mode"] = "cv"
 
     metrics["n_samples"] = len(X)
     metrics["n_positive"] = int(y.sum())

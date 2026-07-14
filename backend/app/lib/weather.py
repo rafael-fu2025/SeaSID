@@ -49,18 +49,41 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
 
 
-def fetch_forecast(lat: float, lon: float, forecast_days: int = 2) -> list[dict]:
+def fetch_forecast(
+    lat: float,
+    lon: float,
+    past_hours: int = 0,
+    forecast_hours: int = 48,
+) -> list[dict]:
     """
-    Pull hourly forecast from Open-Meteo.
-    Returns a list of dicts, one per hour, with keys:
+    Pull hourly forecast from Open-Meteo, covering a precise hour-aligned window.
+
+    Window returned: ``[now - past_hours, now + forecast_hours)`` continuous,
+    no day-boundary truncation. Replaces the older ``forecast_days`` parameter
+    which silently truncated to ``[today 00:00 UTC, ...]`` and produced rows
+    that were "past today" mixed with "future today" — making lookback queries
+    in the dashboard return empty DataFrames for any hour outside today's
+    daylight.
+
+    Args:
+        lat, lon: site coordinates.
+        past_hours: how many hours before "now" to include (0 = forecast only).
+        forecast_hours: how many hours after "now" to include (default 48).
+
+    Returns:
+        List of dicts (one per hour) with keys:
         ts, precip_mm, wind_max_kmh, wind_mean_kmh, wave_max_m, sea_temp_c
-    Falls back to synthetic data if the API is unreachable.
+        Falls back to synthetic data if the API is unreachable.
     """
+    past_hours = max(0, int(past_hours))
+    forecast_hours = max(1, int(forecast_hours))
+
     params = {
         "latitude": lat,
         "longitude": lon,
         "hourly": "precipitation,wind_speed_10m,wind_gusts_10m",
-        "forecast_days": forecast_days,
+        "past_hours": past_hours,
+        "forecast_hours": forecast_hours,
         "timezone": "UTC",
     }
     data = _retry_get(FORECAST_URL, params, label="Open-Meteo Forecast")
@@ -70,14 +93,15 @@ def fetch_forecast(lat: float, lon: float, forecast_days: int = 2) -> list[dict]
         "latitude": lat,
         "longitude": lon,
         "hourly": "wave_height,sea_surface_temperature",
-        "forecast_days": forecast_days,
+        "past_hours": past_hours,
+        "forecast_hours": forecast_hours,
         "timezone": "UTC",
     }
     marine_data = _retry_get(MARINE_URL, marine_params, label="Open-Meteo Marine")
 
     if data is None:
         logger.warning("Forecast API failed — using synthetic fallback")
-        return _synthetic_forecast(lat, lon, forecast_days)
+        return _synthetic_forecast(lat, lon, past_hours, forecast_hours)
 
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
@@ -101,7 +125,10 @@ def fetch_forecast(lat: float, lon: float, forecast_days: int = 2) -> list[dict]
             "sea_temp_c": _safe_float(sea_temp, i, default=None),
         })
 
-    logger.info("Fetched %d forecast hours for (%.4f, %.4f)", len(rows), lat, lon)
+    logger.info(
+        "Fetched %d forecast hours for (%.4f, %.4f): past=%dh forecast=%dh",
+        len(rows), lat, lon, past_hours, forecast_hours,
+    )
     return rows
 
 
@@ -159,10 +186,16 @@ def fetch_archive(
 
 # ── Synthetic fallback ─────────────────────────────────────────────────────
 
-def _synthetic_forecast(lat: float, lon: float, forecast_days: int) -> list[dict]:
+def _synthetic_forecast(
+    lat: float,
+    lon: float,
+    past_hours: int = 0,
+    forecast_hours: int = 48,
+) -> list[dict]:
     """Deterministic synthetic weather seeded by (lat, lon, date) for reproducibility."""
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    return _generate_synthetic(lat, lon, now, forecast_days * 24)
+    start = now - timedelta(hours=past_hours)
+    return _generate_synthetic(lat, lon, start, past_hours + forecast_hours)
 
 
 def _synthetic_archive(lat: float, lon: float, start_date: str, end_date: str) -> list[dict]:

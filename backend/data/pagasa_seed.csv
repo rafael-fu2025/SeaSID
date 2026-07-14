@@ -1,0 +1,13 @@
+date,site_key,rain_mm,wind_max_kmh,wave_m,actual_viz_m,current,actual_current,no_go_reason,confidence,comments
+2026-05-15,dauin_muck,2.1,12.0,0.4,18.0,Low,Low,,med,"calm day, dive conditions nominal"
+2026-05-22,dauin_muck,28.5,32.0,1.1,4.0,Moderate,Moderate,weather,high,"heavy afternoon squall, viz dropped to 4m"
+2026-06-03,dauin_muck,0.0,18.0,0.6,15.0,Low,Low,,med,"light winds, perfect diving"
+2026-06-12,dauin_muck,15.0,28.0,0.9,7.0,Moderate,Moderate,weather,med,"rainy morning but cleared by 10am"
+2026-06-20,dauin_muck,45.0,42.0,1.8,2.5,High,High,weather,high,"full-day storm, no boats ran"
+2026-07-02,dauin_muck,5.0,15.0,0.5,16.0,Low,Low,,med,typical July conditions
+2026-05-15,apo_reef,0.5,10.0,0.3,20.0,Low,Low,,med,"calm clear water, viz excellent"
+2026-05-22,apo_reef,2.0,18.0,0.5,18.0,Low,Low,,med,"minor chop but diveable"
+2026-06-03,apo_reef,1.0,20.0,0.7,14.0,Moderate,Moderate,current,med,"mid-day current picked up"
+2026-06-12,apo_reef,12.0,25.0,0.8,10.0,Moderate,Moderate,weather,med,"rain at boat departure but cleared"
+2026-06-20,apo_reef,38.0,40.0,1.5,3.0,High,High,weather,high,"storm warning, all boats cancelled"
+2026-07-02,apo_reef,3.0,12.0,0.4,18.0,Low,Low,,med,"excellent day, multiple dive boats ran"

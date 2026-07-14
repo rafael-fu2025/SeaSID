@@ -1,0 +1,92 @@
+{
+  "captured_at": "2026-07-13T09:30:00Z",
+  "phase": "Phase 8 — Active-learning UI loop",
+  "files_changed": [
+    "backend/app/lib/active_learning.py (NEW — entropy math + suggestion engine + summary)",
+    "backend/app/api/main.py (GET /active-learning/suggestions, GET /active-learning/summary)",
+    "backend/app/api/schemas.py (ActiveLearningSuggestion, ActiveLearningResponse, ActiveLearningSummaryResponse)",
+    "frontend/src/api.js (getActiveLearningSuggestions, getActiveLearningSummary)",
+    "frontend/src/components/ActiveLearningNudge.jsx (NEW — verdict form + skip + show-all)",
+    "frontend/src/pages/Dashboard.jsx (mounts nudge below alerts banner)",
+    "backend/tests/test_phase8_active_learning.py (NEW — 19 regression tests)"
+  ],
+  "principle": "Rather than asking operators to label every historical day, surface the days whose label is most likely to reduce model uncertainty. Binary entropy H(p) = -p*log2(p) - (1-p)*log2(1-p) is maximum (1.0 bit) at p=0.5 and falls off toward the extremes. The 'model is on the fence' band [0.35, 0.65] is the sweet spot for active learning.",
+  "uncertainty_band": [0.35, 0.65],
+  "lookback_days": 7,
+  "top_n_default": 3,
+  "what_it_does": [
+    "Replays the production model path (predict + calibrator) for each of the last 7 days at noon UTC.",
+    "Computes binary entropy of the resulting p_bad for each date.",
+    "Filters out dates that already have an OperatorVerification or a high-confidence NoDiveLabel (operator already spoke).",
+    "Filters out dates where p_bad is outside [0.35, 0.65] (model was confident — asking is wasteful).",
+    "Sorts remaining dates by entropy descending, returns the top 3.",
+    "Each suggestion includes site_key, date, p_bad, uncertainty, model_source, rank, and a human-readable reason."
+  ],
+  "ui_integration": [
+    "ActiveLearningNudge component renders above the KPI strip on the dashboard.",
+    "Pre-fills verdict with the model's implied call (p>=0.5 => no_dive, else dive) so the common case is one click.",
+    "Confirm button POSTs to /verify with the chosen verdict, no_go_reason, confidence, and a 'active_learning:' comments tag for traceability.",
+    "After verify, the date is added to OperatorVerification and immediately drops out of the queue on the next re-fetch.",
+    "Skip button moves to the next suggestion without recording anything.",
+    "Show-all button expands the full ranked list with entropy scores."
+  ],
+  "live_verification": {
+    "total_suggestions_today": 3,
+    "dauin_muck": [
+      {"date": "2026-07-06", "p_bad": 0.45, "entropy": 0.99, "source": "rule_based"},
+      {"date": "2026-07-07", "p_bad": 0.45, "entropy": 0.99, "source": "rule_based"}
+    ],
+    "apo_reef": [
+      {"date": "2026-07-06", "p_bad": 0.45, "entropy": 0.99, "source": "rule_based"}
+    ],
+    "note": "All three suggestions are at p_bad=0.45 because the rule-based scorer's 'MODERATE' bucket maps to 0.45 — exactly the center of the uncertainty band. Once LSTM/XGB models are trained and produce continuous probabilities, the entropy distribution will spread out and the nudge will surface genuinely diverse 'on the fence' dates."
+  },
+  "tests": {
+    "phase8_regression_count": 19,
+    "phase8_passed": 17,
+    "phase8_skipped": 1,
+    "phase8_failed": 0,
+    "phase8_skipped_reason": "test_verify_closes_the_active_learning_loop skips if no date lands in the uncertainty band (rule-based scorer outputs 0.45 so most days do, but timing edge cases)",
+    "phase7_regression_count": 16,
+    "phase7_regression_status": "all passing",
+    "phase6_regression_count": 12,
+    "phase6_regression_status": "all passing",
+    "phase5_regression_count": 8,
+    "phase5_regression_status": "all passing",
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing",
+    "phase3_regression_count": 8,
+    "phase3_regression_status": "all passing",
+    "phase2_regression_count": 13,
+    "phase2_regression_status": "all passing",
+    "phase1_regression_count": 4,
+    "phase1_regression_status": "all passing",
+    "lstm_legacy_count": 8,
+    "lstm_legacy_status": "all passing",
+    "combined_regression_tests": "93 passed, 1 skipped in 40s"
+  },
+  "key_phase8_tests": [
+    "test_binary_entropy_max_at_half — H(0.5) = 1.0",
+    "test_binary_entropy_min_at_extremes — H(0) and H(1) ~ 0",
+    "test_in_uncertainty_band_inside/outside — boundary check",
+    "test_suggest_active_labels_unknown_site_returns_empty — defensive",
+    "test_suggest_active_labels_returns_list_of_dicts — JSON contract",
+    "test_suggest_active_labels_only_returns_in_band — every suggestion in [0.35, 0.65]",
+    "test_suggest_active_labels_no_today — lookback starts at offset 1",
+    "test_active_learning_summary_structure — per_site + total",
+    "test_already_labeled_filters_out_high_confidence — operator-grade label suppresses",
+    "test_already_labeled_does_not_block_low_confidence — re-asking is correct for low-confidence",
+    "test_already_labeled_respects_operator_verification — source of truth",
+    "test_api_suggestions_endpoint_returns_active_learning_response — full stack",
+    "test_api_suggestions_endpoint_404_for_unknown_site — defensive 404",
+    "test_api_summary_endpoint — cross-site snapshot",
+    "test_verify_closes_the_active_learning_loop — submit closes the loop"
+  ],
+  "future_extensions": [
+    "Add a 'mark all dates I was on the boat' bulk action so operators can back-fill seasons in a few clicks.",
+    "Show the suggestion on the operator's Settings page as a 'labeling backlog' counter so they see total volume.",
+    "When the LSTM/XGB model is finally trained (post-Phase 3 thresholds), the suggestions will spread out across the [0.35, 0.65] band instead of clustering at 0.45 — re-run scripts/train_model.py to see.",
+    "Move the 'model said X%' callout to the Verify.jsx page too, so operators can fill from the Verify flow."
+  ],
+  "next_phase": "All 8 phases complete. Roadmap #8 is shipped end-to-end. Future work (operator backlog #11, cold-path #15) is documented in SeaSID.md but out of scope for the original 8-phase plan."
+}

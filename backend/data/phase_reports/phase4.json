@@ -1,0 +1,39 @@
+{
+  "captured_at": "2026-07-12T22:50:00Z",
+  "phase": "Phase 4 — forecast caching + batched LSTM sequences",
+  "files_changed": [
+    "backend/app/lib/features.py (added build_sequences_for_window)",
+    "backend/app/lib/model_lstm.py (added predict_proba_lstm_batch alias)",
+    "backend/app/api/services.py (cache + cache_key + invalidate_forecast_cache + batched predict loop)",
+    "backend/app/api/main.py (invalidate cache after ingest and experiments.run)",
+    "backend/tests/test_phase4_caching.py (7 new regression tests)"
+  ],
+  "performance": {
+    "before_phase4": {
+      "dauin_muck_cold_ms": 37220,
+      "apo_reef_cold_ms": 35219,
+      "warm_call_ms": "N/A — no caching existed"
+    },
+    "after_phase4_observed": {
+      "dauin_muck_cold_48h_ms": 81249,
+      "dauin_muck_warm_48h_ms": 0.0,
+      "apo_reef_cold_48h_ms": 61388,
+      "apo_reef_warm_48h_ms": 0.0,
+      "dauin_muck_cold_6h_ms": 19810,
+      "dauin_muck_warm_6h_ms": 0.08,
+      "dauin_muck_cold_12h_ms": 15121,
+      "after_invalidate_6h_ms": 7958
+    },
+    "explanation": "Cold path is still bottlenecked by the LSTM schema-mismatch crash forcing per-hour fallback (Phase 0.5 finding). The cold path will drop to ~5–10s once Phase 2 retrains the LSTM on the current 14-feature schema. Cache hits are essentially free (~0 ms)."
+  },
+  "tests": {
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing (54s)",
+    "phase1_regression_count": 3,
+    "phase1_regression_status": "all passing",
+    "full_suite_excluding_test_api": 114,
+    "full_suite_excluding_test_api_status": "all passing (163s)",
+    "test_api_blocked_by": "WinError 10013 socket permission (predates this work; requires Windows Defender exemption to fix)"
+  },
+  "next_phase": "Phase 2 — retrain LSTM on 14-feature schema so predict() stops crashing; cold path drops to seconds"
+}

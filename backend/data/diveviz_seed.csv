@@ -1,0 +1,9 @@
+date,site_key,label,actual_viz_m,actual_current,no_go_reason,confidence,comments
+2026-05-12,dauin_muck,dive,17.0,Low,,high,diveviz operator log: clear, calm
+2026-05-25,dauin_muck,poor_viz,7.0,Moderate,weather,med,diveviz operator log: rain overnight, runoff
+2026-06-04,dauin_muck,dive,15.0,Low,,high,diveviz operator log: nominal
+2026-06-15,dauin_muck,no_dive,2.0,High,weather,high,diveviz operator log: typhoon swell, no boats
+2026-06-28,dauin_muck,dive,14.0,Low,,high,diveviz operator log: clean conditions
+2026-05-12,apo_reef,dive,22.0,Low,,high,diveviz operator log: excellent vis
+2026-06-04,apo_reef,dive,18.0,Low,,high,diveviz operator log: nominal
+2026-06-28,apo_reef,dive,17.0,Low,,high,diveviz operator log: clean

@@ -164,6 +164,13 @@ class NoDiveLabel(Base):
     actual_current = Column(String(20), nullable=True)
     comments = Column(Text, nullable=True)
     shop_name = Column(String(100), nullable=True)
+    # Phase 5: structured reason + confidence. ``no_go_reason`` tells the
+    # trainer which physical driver mattered (visibility, current, swell,
+    # weather, boat traffic, other). ``confidence`` is the operator's
+    # self-reported trust in the label — used as a training weight so
+    # high-confidence labels contribute more than guesses.
+    no_go_reason = Column(String(20), nullable=True)  # viz, current, swell, weather, boat, other
+    confidence = Column(String(8), nullable=True)      # low, med, high
 
     __table_args__ = (
         UniqueConstraint("site_key", "date", "source", name="uq_label_site_date_source"),
@@ -183,6 +190,19 @@ class OperatorVerification(Base):
     actual_current = Column(String(20), nullable=True)
     comments = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Phase 5: structured reason + confidence — see NoDiveLabel docstring.
+    no_go_reason = Column(String(20), nullable=True)
+    confidence = Column(String(8), nullable=True)
+
+    # One verification per (site, date, operator). NULL operators are treated
+    # as distinct by both SQLite and PostgreSQL, so anonymous submissions do
+    # not collide with each other.
+    __table_args__ = (
+        UniqueConstraint(
+            "site_key", "date", "operator",
+            name="uq_opver_site_date_operator",
+        ),
+    )
 
 
 class Alert(Base):

@@ -43,8 +43,18 @@ class OpenMeteoWeatherProvider(WeatherProvider):
     )
 
     def fetch_hourly(self, lat: float, lon: float, hours: int = 48) -> list[dict]:
-        forecast_days = max(1, hours // 24)
-        rows = fetch_forecast(lat, lon, forecast_days=forecast_days)
+        # Cover as much of the requested window as possible in one call.
+        # Open-Meteo's forecast endpoint supports up to ~16 days (384h) total
+        # when combining past_hours + forecast_hours, so 7 days (168h) is safe.
+        # Cap past_hours at 168 (7d) since the archive endpoint is the right
+        # tool for anything older.
+        past_hours = min(int(hours), 168)
+        forecast_hours = max(1, int(hours) - past_hours)
+        rows = fetch_forecast(
+            lat, lon,
+            past_hours=past_hours,
+            forecast_hours=forecast_hours,
+        )
         out = []
         for r in rows:
             out.append(
@@ -79,8 +89,13 @@ class OpenMeteoMarineProvider(MarineProvider):
     )
 
     def fetch_hourly(self, lat: float, lon: float, hours: int = 48) -> list[dict]:
-        forecast_days = max(1, hours // 24)
-        rows = fetch_forecast(lat, lon, forecast_days=forecast_days)
+        past_hours = min(int(hours), 168)
+        forecast_hours = max(1, int(hours) - past_hours)
+        rows = fetch_forecast(
+            lat, lon,
+            past_hours=past_hours,
+            forecast_hours=forecast_hours,
+        )
         out = []
         for r in rows:
             out.append(

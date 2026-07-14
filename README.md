@@ -79,20 +79,20 @@ The dashed boxes (Storm Glass, AQICN) are optional — when their env keys are u
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **LSTM Forecast** | PyTorch 2-layer LSTM, 24h sliding window, 14 features |
-| **XGBoost Baseline** | sklearn-compatible classifier, LeaveOneOut CV |
-| **Rule-Based Baseline** | Hand-tuned thresholds for cold-start (used when no model loaded) |
-| **Pluggable Providers** | Open-Meteo (default) · Storm Glass · AQICN · WorldTides |
-| **LLM Agent** | OpenAI-compatible (MiniMax-M3) with **7 function-calling tools** |
-| **AI Agent FAB** | Floating chat popover on every page — markdown, no emojis |
-| **Responsive Sidebar** | Drawer (xs/sm) · narrow rail (md) · collapsible full (lg/xl) |
-| **Settings** | Theme switch, default site, per-tool toggles, agent-tools reference |
-| **Operator Verification** | Feedback loop for continuous model improvement |
-| **Real-Time Alerts** | Threshold-based (wind, rain, waves, currents) — explicit `/alerts/run` |
-| **Experiment Suite** | 4 models × 4 ablations × 5 metrics with automated plots |
-| **OSM Map** | OpenStreetMap with P(no-go) heat-radius overlay per site |
+| Feature                         | Description                                                              |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| **LSTM Forecast**         | PyTorch 2-layer LSTM, 24h sliding window, 14 features                    |
+| **XGBoost Baseline**      | sklearn-compatible classifier, LeaveOneOut CV                            |
+| **Rule-Based Baseline**   | Hand-tuned thresholds for cold-start (used when no model loaded)         |
+| **Pluggable Providers**   | Open-Meteo (default) · Storm Glass · AQICN · WorldTides               |
+| **LLM Agent**             | OpenAI-compatible (MiniMax-M3) with**7 function-calling tools**    |
+| **AI Agent FAB**          | Floating chat popover on every page — markdown, no emojis               |
+| **Responsive Sidebar**    | Drawer (xs/sm) · narrow rail (md) · collapsible full (lg/xl)           |
+| **Settings**              | Theme switch, default site, per-tool toggles, agent-tools reference      |
+| **Operator Verification** | Feedback loop for continuous model improvement                           |
+| **Real-Time Alerts**      | Threshold-based (wind, rain, waves, currents) — explicit`/alerts/run` |
+| **Experiment Suite**      | 4 models × 4 ablations × 5 metrics with automated plots                |
+| **OSM Map**               | OpenStreetMap with P(no-go) heat-radius overlay per site                 |
 
 ---
 
@@ -157,41 +157,41 @@ npm run dev   # http://localhost:5173
 
 ## API Endpoints (`/api/v1/...`)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | DB + model status |
-| GET | `/sites` | List registered dive sites |
-| GET | `/forecast?site=<key>` | 48-hour forecast (includes optional `air` block) |
-| POST | `/ingest` | Pull weather + marine + air + tide data |
-| POST | `/verify` | Submit operator verification |
-| GET | `/labels?site=<key>` | Label history |
-| GET | `/alerts?site=<key>` | Recent alerts |
-| POST | `/alerts/run` | Trigger alert evaluation (write-side) |
-| POST | `/agent/chat` | Agent conversation |
-| GET | `/agent/briefing?site=<key>` | Auto-generated briefing |
-| GET | `/experiments/results` | Experiment results |
-| POST | `/experiments/run` | Run experiment suite (auto-reloads model) |
+| Method | Endpoint                       | Description                                       |
+| ------ | ------------------------------ | ------------------------------------------------- |
+| GET    | `/health`                    | DB + model status                                 |
+| GET    | `/sites`                     | List registered dive sites                        |
+| GET    | `/forecast?site=<key>`       | 48-hour forecast (includes optional`air` block) |
+| POST   | `/ingest`                    | Pull weather + marine + air + tide data           |
+| POST   | `/verify`                    | Submit operator verification                      |
+| GET    | `/labels?site=<key>`         | Label history                                     |
+| GET    | `/alerts?site=<key>`         | Recent alerts                                     |
+| POST   | `/alerts/run`                | Trigger alert evaluation (write-side)             |
+| POST   | `/agent/chat`                | Agent conversation                                |
+| GET    | `/agent/briefing?site=<key>` | Auto-generated briefing                           |
+| GET    | `/experiments/results`       | Experiment results                                |
+| POST   | `/experiments/run`           | Run experiment suite (auto-reloads model)         |
 
 ---
 
 ## 14-Feature Vector
 
-| # | Feature | Window | Unit | Source | Since |
-|---|---------|--------|------|--------|-------|
-| 1 | `precip_24h_mm` | 24h sum | mm | Open-Meteo | v1 |
-| 2 | `precip_48h_mm` | 48h sum | mm | Open-Meteo | v1 |
-| 3 | `precip_recent_3h` | 3h sum | mm | Open-Meteo | v1 |
-| 4 | `wind_max_24h_kmh` | 24h max | km/h | Open-Meteo | v1 |
-| 5 | `wind_mean_24h_kmh` | 24h mean | km/h | Open-Meteo | v1 |
-| 6 | `wave_max_24h_m` | 24h max | m | Open-Meteo Marine | v1 |
-| 7 | `sea_temp_mean_24h` | 24h mean | °C | Open-Meteo Marine | v1 |
-| 8 | `tide_max_24h_m` | 24h max | m | WorldTides | v1 |
-| 9 | `tide_min_24h_m` | 24h min | m | WorldTides | v1 |
-| 10 | `tide_range_24h_m` | max − min | m | WorldTides | v1 |
-| 11 | `is_muck_site` | static | 0/1 | site registry | v1 |
-| 12 | `aqi_recent` | current | AQI | **AQICN** | v2.1 |
-| 13 | `pm25_recent` | current | µg/m³ | **AQICN** | v2.1 |
-| 14 | `wave_period_s_mean` | 24h mean | s | **Storm Glass** | v2.1 |
+| #  | Feature                | Window     | Unit    | Source                | Since |
+| -- | ---------------------- | ---------- | ------- | --------------------- | ----- |
+| 1  | `precip_24h_mm`      | 24h sum    | mm      | Open-Meteo            | v1    |
+| 2  | `precip_48h_mm`      | 48h sum    | mm      | Open-Meteo            | v1    |
+| 3  | `precip_recent_3h`   | 3h sum     | mm      | Open-Meteo            | v1    |
+| 4  | `wind_max_24h_kmh`   | 24h max    | km/h    | Open-Meteo            | v1    |
+| 5  | `wind_mean_24h_kmh`  | 24h mean   | km/h    | Open-Meteo            | v1    |
+| 6  | `wave_max_24h_m`     | 24h max    | m       | Open-Meteo Marine     | v1    |
+| 7  | `sea_temp_mean_24h`  | 24h mean   | °C     | Open-Meteo Marine     | v1    |
+| 8  | `tide_max_24h_m`     | 24h max    | m       | WorldTides            | v1    |
+| 9  | `tide_min_24h_m`     | 24h min    | m       | WorldTides            | v1    |
+| 10 | `tide_range_24h_m`   | max − min | m       | WorldTides            | v1    |
+| 11 | `is_muck_site`       | static     | 0/1     | site registry         | v1    |
+| 12 | `aqi_recent`         | current    | AQI     | **AQICN**       | v2.1  |
+| 13 | `pm25_recent`        | current    | µg/m³ | **AQICN**       | v2.1  |
+| 14 | `wave_period_s_mean` | 24h mean   | s       | **Storm Glass** | v2.1  |
 
 Columns 1-11 are the **v2 contract**; 12-14 are the **v2.1 extension** for air-quality (AQICN) and marine augmentation (Storm Glass). When an optional provider is not configured, sensible defaults are used (0.0 for AQI/PM2.5, 6.0 s for tropical-swell wave period) so the model still works on the 11-feature baseline.
 
@@ -201,20 +201,20 @@ Columns 1-11 are the **v2 contract**; 12-14 are the **v2.1 extension** for air-q
 
 Three roles are decoupled and toggled per-role via environment variables:
 
-| Role | Default | Optional | Env var |
-|---|---|---|---|
-| `weather` — surface weather | `open_meteo` | — | `SEASID_PROVIDER_WEATHER` |
-| `marine` — wave, swell, currents | `open_meteo` | `stormglass` | `SEASID_PROVIDER_MARINE` |
-| `air` — AQI, PM2.5, PM10, O₃, NO₂ | `off` | `aqicn` | `SEASID_PROVIDER_AIR` |
+| Role                                   | Default        | Optional       | Env var                     |
+| -------------------------------------- | -------------- | -------------- | --------------------------- |
+| `weather` — surface weather         | `open_meteo` | —             | `SEASID_PROVIDER_WEATHER` |
+| `marine` — wave, swell, currents    | `open_meteo` | `stormglass` | `SEASID_PROVIDER_MARINE`  |
+| `air` — AQI, PM2.5, PM10, O₃, NO₂ | `off`        | `aqicn`      | `SEASID_PROVIDER_AIR`     |
 
 Each provider is also honouring per-site opt-out via the `air_provider_disabled` site flag (set when the nearest AQICN station is > 500 km away — the free tier would return meaningless distant data).
 
-| Provider | Free tier | Key env var |
-|---|---|---|
-| **Open-Meteo** (weather + marine) | unlimited, no key | — |
-| **Storm Glass** (marine augmentation) | 50 req/day | `STORMGLASS_API_KEY` |
-| **AQICN** (air quality) | 1000 req/day | `AQICN_API_KEY` |
-| **WorldTides** (tides only) | 100 req/day | `WORLDTIDES_API_KEY` |
+| Provider                                    | Free tier         | Key env var            |
+| ------------------------------------------- | ----------------- | ---------------------- |
+| **Open-Meteo** (weather + marine)     | unlimited, no key | —                     |
+| **Storm Glass** (marine augmentation) | 50 req/day        | `STORMGLASS_API_KEY` |
+| **AQICN** (air quality)               | 1000 req/day      | `AQICN_API_KEY`      |
+| **WorldTides** (tides only)           | 100 req/day       | `WORLDTIDES_API_KEY` |
 
 See [`backend/app/lib/providers/README.md`](backend/app/lib/providers/README.md) for the full contract.
 
@@ -222,15 +222,15 @@ See [`backend/app/lib/providers/README.md`](backend/app/lib/providers/README.md)
 
 ## AI Agent — 7 Tools
 
-| Tool | Args | Returns |
-|------|------|---------|
-| `get_forecast` | `site_key` | 48h forecast + risk + P(no-go) + `air` block |
-| `get_weather` | `site_key` | Detailed weather (precip, wind, wave, sea-temp, tides) |
-| `list_sites` | — | All registered sites |
-| `get_model_info` | — | Loaded model type + top-5 feature importances |
-| `get_history` | `site_key, days?` | Recent label history |
-| `check_alerts` | `site_key` | Recent alerts (last 24h) |
-| **`get_air_quality`** *(v2.1)* | `site_key` | AQICN snapshot — AQI, PM2.5, PM10, O₃, NO₂ + station info |
+| Tool                                     | Args                | Returns                                                      |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------ |
+| `get_forecast`                         | `site_key`        | 48h forecast + risk + P(no-go) +`air` block                |
+| `get_weather`                          | `site_key`        | Detailed weather (precip, wind, wave, sea-temp, tides)       |
+| `list_sites`                           | —                  | All registered sites                                         |
+| `get_model_info`                       | —                  | Loaded model type + top-5 feature importances                |
+| `get_history`                          | `site_key, days?` | Recent label history                                         |
+| `check_alerts`                         | `site_key`        | Recent alerts (last 24h)                                     |
+| **`get_air_quality`** *(v2.1)* | `site_key`        | AQICN snapshot — AQI, PM2.5, PM10, O₃, NO₂ + station info |
 
 Tool responses render through `MarkdownResponse` which strips emoji pictographs and applies professional typography (headings, lists, code blocks, tables, blockquotes).
 
@@ -248,10 +248,10 @@ cd frontend
 npm test
 ```
 
-| Layer | Files | Tests |
-|---|---|---|
-| Backend | 8 | **66** |
-| Frontend | 20 | **81** |
+| Layer           | Files        | Tests         |
+| --------------- | ------------ | ------------- |
+| Backend         | 8            | **66**  |
+| Frontend        | 20           | **81**  |
 | **Total** | **28** | **147** |
 
 ---
@@ -325,13 +325,13 @@ SeaSID/
 
 ## Team
 
-| Role | Responsibility |
-|------|---------------|
-| ML Engineer | LSTM model, 14-feature engineering, experiments |
-| Agent Developer | OpenAI-compatible integration, 7 tools, briefing generation |
-| Backend Engineer | FastAPI, 6-table SQLite, provider registry, alerts |
-| Frontend Engineer | React UI, design system, responsive sidebar, FAB |
-| DevOps | Docker, deployment, CI/CD |
+| Role              | Responsibility                                              |
+| ----------------- | ----------------------------------------------------------- |
+| ML Engineer       | LSTM model, 14-feature engineering, experiments             |
+| Agent Developer   | OpenAI-compatible integration, 7 tools, briefing generation |
+| Backend Engineer  | FastAPI, 6-table SQLite, provider registry, alerts          |
+| Frontend Engineer | React UI, design system, responsive sidebar, FAB            |
+| DevOps            | Docker, deployment, CI/CD                                   |
 
 ---
 

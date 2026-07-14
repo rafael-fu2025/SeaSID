@@ -2,9 +2,13 @@
 Test fixtures for SeaSID backend tests.
 """
 
+import asyncio
+import gc
 import os
+import socket as _socket
 import sys
 import tempfile
+import time
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +18,60 @@ import pytest
 
 # Ensure backend root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+# Patch socket.socketpair with a retry wrapper.
+#
+# On Windows, asyncio creates a self-pipe via socket.socketpair() the first
+# time each event loop is constructed. socket.socketpair() falls back to a
+# loop that does ``socket.bind(('127.0.0.1', 0))`` to grab an ephemeral
+# TCP port; that bind intermittently fails with WinError 10013 once earlier
+# tests have churned sockets/handles (especially after SQLite's WAL mode
+# leaves transient file handles). A short retry rides out the race without
+# touching test code.
+if sys.platform == "win32":
+    _original_socketpair = _socket.socketpair
+
+    def _retrying_socketpair(*args, **kwargs):
+        last_err: Exception | None = None
+        for _ in range(10):
+            try:
+                return _original_socketpair(*args, **kwargs)
+            except (PermissionError, OSError) as exc:
+                last_err = exc
+                gc.collect()
+                time.sleep(0.1)
+        assert last_err is not None
+        raise last_err
+
+    _socket.socketpair = _retrying_socketpair
+
+    # Defensive: if a loop was created when socketpair() still failed (or
+    # was retried mid-init), the proactor loop instance may lack
+    # ``_ssock``. Subsequent close() then crashes with
+    # "AttributeError: 'ProactorEventLoop' object has no attribute '_ssock'".
+    # Patch _close_self_pipe so the teardown is a no-op when the self-pipe
+    # never finished constructing. Python 3.14 renamed the class to
+    # BaseProactorEventLoop; patch whichever variant is available.
+    import asyncio.proactor_events as _proactor
+
+    _ProactorCls = getattr(
+        _proactor, "ProactorEventLoop", None
+    ) or getattr(_proactor, "BaseProactorEventLoop", None)
+
+    if _ProactorCls is not None:
+        _original_close_self_pipe = _ProactorCls._close_self_pipe
+
+        def _safe_close_self_pipe(self):  # noqa: ANN001 - proactor ducktype
+            if not hasattr(self, "_ssock") or self._ssock is None:
+                return
+            try:
+                _original_close_self_pipe(self)
+            except (AttributeError, OSError):
+                pass
+
+        _ProactorCls._close_self_pipe = _safe_close_self_pipe
+
 
 from app.lib.db import Base, engine, SessionLocal, WeatherObs, TideObs, NoDiveLabel, init_db
 from app.lib.features import FEATURE_COLUMNS
@@ -46,9 +104,23 @@ def _setup_test_db(tmp_path, monkeypatch):
 
     yield test_engine, TestSession
 
-    # Cleanup
+    # Cleanup — order matters on Windows:
+    #   1. drop_all releases schema-bound locks
+    #   2. engine.dispose() closes every pooled connection
+    #   3. gc.collect() forces finalizers to run so file handles are
+    #      released before we try to delete the SQLite file
+    #   4. unlink the file (retry-safe to ride out any lingering lock)
     Base.metadata.drop_all(bind=test_engine)
     test_engine.dispose()
+    gc.collect()
+
+    for _ in range(5):
+        try:
+            test_db_path.unlink(missing_ok=True)
+            break
+        except PermissionError:
+            gc.collect()
+            time.sleep(0.05)
 
 
 @pytest.fixture

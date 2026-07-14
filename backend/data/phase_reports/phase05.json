@@ -1,0 +1,108 @@
+{
+  "captured_at": "2026-07-12T15:15:56.593951+00:00",
+  "sites": {
+    "dauin_muck": {
+      "db_state": {
+        "weather_count": 192,
+        "weather_oldest": "2026-07-05T00:00:00",
+        "weather_newest": "2026-07-12T23:00:00",
+        "marine_count": 312,
+        "marine_oldest": "2026-07-09T00:00:00",
+        "marine_newest": "2026-07-21T23:00:00",
+        "tide_count": 196,
+        "tide_oldest": "2026-07-09T16:00:00",
+        "tide_newest": "2026-07-14T09:00:00"
+      },
+      "feature_check": {
+        "current_hour_features": {
+          "precip_24h_mm": 0.9,
+          "precip_48h_mm": 22.6,
+          "precip_recent_3h": 0.0,
+          "wind_max_24h_kmh": 38.2,
+          "wind_mean_24h_kmh": 14.756,
+          "wave_max_24h_m": 0.72,
+          "sea_temp_mean_24h": 29.552,
+          "tide_max_24h_m": -0.077,
+          "tide_min_24h_m": -0.87,
+          "tide_range_24h_m": 0.793,
+          "is_muck_site": 1.0,
+          "aqi_recent": 40.0,
+          "pm25_recent": 67.0,
+          "wave_period_s_mean": 6.12
+        },
+        "current_hour_labels": {
+          "viz_label": "Poor",
+          "current_risk": "High",
+          "risk_label": "HIGH RISK",
+          "p_bad_rules": 0.85
+        },
+        "sequence_shape": [
+          24,
+          14
+        ],
+        "sequence_nonzero_rows": 24
+      }
+    },
+    "apo_reef": {
+      "db_state": {
+        "weather_count": 192,
+        "weather_oldest": "2026-07-05T00:00:00",
+        "weather_newest": "2026-07-12T23:00:00",
+        "marine_count": 240,
+        "marine_oldest": "2026-07-12T00:00:00",
+        "marine_newest": "2026-07-21T23:00:00",
+        "tide_count": 98,
+        "tide_oldest": "2026-07-12T08:30:00",
+        "tide_newest": "2026-07-14T09:00:00"
+      },
+      "feature_check": {
+        "current_hour_features": {
+          "precip_24h_mm": 0.0,
+          "precip_48h_mm": 18.1,
+          "precip_recent_3h": 0.0,
+          "wind_max_24h_kmh": 29.2,
+          "wind_mean_24h_kmh": 15.808,
+          "wave_max_24h_m": 0.98,
+          "sea_temp_mean_24h": 29.5,
+          "tide_max_24h_m": -0.182,
+          "tide_min_24h_m": -0.868,
+          "tide_range_24h_m": 0.686,
+          "is_muck_site": 0.0,
+          "aqi_recent": 30.0,
+          "pm25_recent": 8.0,
+          "wave_period_s_mean": 5.962
+        },
+        "current_hour_labels": {
+          "viz_label": "Moderate",
+          "current_risk": "Moderate",
+          "risk_label": "MODERATE",
+          "p_bad_rules": 0.45
+        },
+        "sequence_shape": [
+          24,
+          14
+        ],
+        "sequence_nonzero_rows": 24
+      }
+    }
+  },
+  "lstm_schema": {
+    "has_bundle": true,
+    "model_type": "lstm",
+    "scaler_expected_features": 11,
+    "bundle_feature_columns_count": 11,
+    "feature_columns": [
+      "precip_24h_mm",
+      "precip_48h_mm",
+      "precip_recent_3h",
+      "wind_max_24h_kmh",
+      "wind_mean_24h_kmh",
+      "wave_max_24h_m",
+      "sea_temp_mean_24h",
+      "tide_max_24h_m",
+      "tide_min_24h_m",
+      "tide_range_24h_m",
+      "is_muck_site"
+    ]
+  }
+}

@@ -1,0 +1,814 @@
+[
+  {
+    "site_id": "98",
+    "site_name": "Science Garden, Quezon City",
+    "lat": 14.6417,
+    "lon": 121.0439,
+    "source": "manual"
+  },
+  {
+    "site_id": "5001",
+    "site_name": "San Jose Synoptic Station",
+    "lat": 12.3693,
+    "lon": 121.0612,
+    "source": "manual"
+  },
+  {
+    "site_id": "5003",
+    "site_name": "Romblon Synop. Station",
+    "lat": 12.575,
+    "lon": 122.2708,
+    "source": "manual"
+  },
+  {
+    "site_id": "5005",
+    "site_name": "State University, Bohol Island",
+    "lat": 9.6351,
+    "lon": 123.8349,
+    "source": "manual"
+  },
+  {
+    "site_id": "5009",
+    "site_name": "Kidapawan, Cotabato",
+    "lat": 7.0083,
+    "lon": 125.0894,
+    "source": "manual"
+  },
+  {
+    "site_id": "5012",
+    "site_name": "Laoag, Ilocos Norte AWS",
+    "lat": 18.1989,
+    "lon": 120.5926,
+    "source": "manual"
+  },
+  {
+    "site_id": "5013",
+    "site_name": "San Enrique, Iloilo AWS",
+    "lat": 11.0685,
+    "lon": 122.7084,
+    "source": "manual"
+  },
+  {
+    "site_id": "5014",
+    "site_name": "Daet, Camarines Norte AWS",
+    "lat": 14.1144,
+    "lon": 122.9553,
+    "source": "manual"
+  },
+  {
+    "site_id": "5015",
+    "site_name": "Guiuan, Eastern Samar AWS",
+    "lat": 11.0333,
+    "lon": 125.7167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5018",
+    "site_name": "Sinait, Ilocos Sur AWS",
+    "lat": 17.8667,
+    "lon": 120.4667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5019",
+    "site_name": "Bacnotan, La Union AWS",
+    "lat": 16.7167,
+    "lon": 120.35,
+    "source": "manual"
+  },
+  {
+    "site_id": "5020",
+    "site_name": "La Trinidad, Benguet AWS",
+    "lat": 16.4624,
+    "lon": 120.5878,
+    "source": "manual"
+  },
+  {
+    "site_id": "5021",
+    "site_name": "Atok, Benguet AWS",
+    "lat": 16.5811,
+    "lon": 120.6995,
+    "source": "manual"
+  },
+  {
+    "site_id": "5025",
+    "site_name": "Tuguegarao, Cagayan AWS",
+    "lat": 17.6132,
+    "lon": 121.7269,
+    "source": "manual"
+  },
+  {
+    "site_id": "5026",
+    "site_name": "Echague, Isabela AWS",
+    "lat": 16.7054,
+    "lon": 121.6763,
+    "source": "manual"
+  },
+  {
+    "site_id": "5028",
+    "site_name": "Munoz, Nueva Ecija AWS",
+    "lat": 15.7167,
+    "lon": 120.9,
+    "source": "manual"
+  },
+  {
+    "site_id": "5029",
+    "site_name": "San Ildefonso, Bulacan AWS",
+    "lat": 15.0833,
+    "lon": 120.95,
+    "source": "manual"
+  },
+  {
+    "site_id": "5032",
+    "site_name": "Camiling, Tarlac AWS",
+    "lat": 15.6833,
+    "lon": 120.4167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5033",
+    "site_name": "Tanay, Rizal AWS",
+    "lat": 14.4978,
+    "lon": 121.3536,
+    "source": "manual"
+  },
+  {
+    "site_id": "5034",
+    "site_name": "UP Los Banos, Laguna AWS",
+    "lat": 14.1667,
+    "lon": 121.25,
+    "source": "manual"
+  },
+  {
+    "site_id": "5035",
+    "site_name": "Indang, Cavite AWS",
+    "lat": 14.2,
+    "lon": 120.8833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5037",
+    "site_name": "Pili Camarines Sur AWS",
+    "lat": 13.5833,
+    "lon": 123.2833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5038",
+    "site_name": "Guinobatan, Albay AWS",
+    "lat": 13.1833,
+    "lon": 123.6,
+    "source": "manual"
+  },
+  {
+    "site_id": "5039",
+    "site_name": "Virac, Catanduanes AWS",
+    "lat": 13.5833,
+    "lon": 124.2333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5041",
+    "site_name": "Sorsogon, Sorsogon AWS",
+    "lat": 12.9667,
+    "lon": 124.0,
+    "source": "manual"
+  },
+  {
+    "site_id": "5043",
+    "site_name": "Baybay, Leyte AWS",
+    "lat": 10.6833,
+    "lon": 124.8,
+    "source": "manual"
+  },
+  {
+    "site_id": "5046",
+    "site_name": "Dumangas, Iloilo AWS",
+    "lat": 10.8333,
+    "lon": 122.7167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5047",
+    "site_name": "Mambusao, Capiz AWS",
+    "lat": 11.4333,
+    "lon": 122.6,
+    "source": "manual"
+  },
+  {
+    "site_id": "5048",
+    "site_name": "Sibalom, Antique AWS",
+    "lat": 10.7833,
+    "lon": 122.0167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5052",
+    "site_name": "Mambajao, Camiguin AWS",
+    "lat": 9.25,
+    "lon": 124.7167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5053",
+    "site_name": "Talisayan, Misamis Oriental AWS",
+    "lat": 8.9833,
+    "lon": 124.8833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5054",
+    "site_name": "Nasipit, Agusan del Norte AWS",
+    "lat": 8.9833,
+    "lon": 125.3333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5055",
+    "site_name": "Tandag, Surigao del Sur AWS",
+    "lat": 9.0667,
+    "lon": 126.1833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5056",
+    "site_name": "Mati, Davao Oriental AWS",
+    "lat": 6.95,
+    "lon": 126.2167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5057",
+    "site_name": "Nabunturan, Davao de Oro AWS",
+    "lat": 7.6,
+    "lon": 125.9667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5058",
+    "site_name": "Tagum, Davao del Norte AWS",
+    "lat": 7.45,
+    "lon": 125.8,
+    "source": "manual"
+  },
+  {
+    "site_id": "5059",
+    "site_name": "Kabacan, Cotabato AWS",
+    "lat": 7.1167,
+    "lon": 124.8167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5060",
+    "site_name": "Tantangan, South Cotabato AWS",
+    "lat": 6.6333,
+    "lon": 124.75,
+    "source": "manual"
+  },
+  {
+    "site_id": "5061",
+    "site_name": "Valencia, Bukidnon AWS",
+    "lat": 7.9,
+    "lon": 125.0833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5068",
+    "site_name": "RTR Philrice, Agusan del Norte AWS",
+    "lat": 8.6667,
+    "lon": 125.6333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5076",
+    "site_name": "Maddela, Quirino AWS",
+    "lat": 16.35,
+    "lon": 121.6833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5077",
+    "site_name": "Apayao AWS",
+    "lat": 18.05,
+    "lon": 121.5833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5079",
+    "site_name": "San Jacinto, Ticao Island, Masbate AWS",
+    "lat": 12.5667,
+    "lon": 123.7333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5102",
+    "site_name": "Rizal, Palawan AWS",
+    "lat": 8.6333,
+    "lon": 117.45,
+    "source": "manual"
+  },
+  {
+    "site_id": "5103",
+    "site_name": "Brooke&#039;s Point Palawan AWS",
+    "lat": 8.7667,
+    "lon": 117.85,
+    "source": "manual"
+  },
+  {
+    "site_id": "5104",
+    "site_name": "Sta Ana, Cagayan AWS",
+    "lat": 18.4833,
+    "lon": 122.15,
+    "source": "manual"
+  },
+  {
+    "site_id": "5105",
+    "site_name": "Aparri, Cagayan AWS",
+    "lat": 18.35,
+    "lon": 121.6333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5107",
+    "site_name": "Baler Synoptic Station AWS",
+    "lat": 15.7667,
+    "lon": 121.5667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5110",
+    "site_name": "Dagupan Pangasinan AWS",
+    "lat": 16.05,
+    "lon": 120.3333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5111",
+    "site_name": "Hacienda Luisita, Tarlac AWS",
+    "lat": 15.45,
+    "lon": 120.55,
+    "source": "manual"
+  },
+  {
+    "site_id": "5113",
+    "site_name": "Ambulong Tanauan Batangas AWS",
+    "lat": 14.0833,
+    "lon": 121.15,
+    "source": "manual"
+  },
+  {
+    "site_id": "5115",
+    "site_name": "Infanta, Quezon AWS",
+    "lat": 14.75,
+    "lon": 121.65,
+    "source": "manual"
+  },
+  {
+    "site_id": "5116",
+    "site_name": "Taal, Batangas AWS",
+    "lat": 14.0167,
+    "lon": 120.9333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5117",
+    "site_name": "Lipa, Batangas AWS",
+    "lat": 13.95,
+    "lon": 121.1667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5118",
+    "site_name": "Mabini, Batangas AWS",
+    "lat": 13.7333,
+    "lon": 120.9,
+    "source": "manual"
+  },
+  {
+    "site_id": "5119",
+    "site_name": "Sofronio Espanola, Palawan AWS",
+    "lat": 8.95,
+    "lon": 117.9833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5120",
+    "site_name": "Puerto Galera, Mindoro Oriental AWS",
+    "lat": 13.5,
+    "lon": 120.95,
+    "source": "manual"
+  },
+  {
+    "site_id": "5122",
+    "site_name": "Calapan, Mindoro Oriental AWS",
+    "lat": 13.4167,
+    "lon": 121.1833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5123",
+    "site_name": "Coron, Palawan AWS",
+    "lat": 12.0,
+    "lon": 120.2,
+    "source": "manual"
+  },
+  {
+    "site_id": "5124",
+    "site_name": "Puerto Princesa, Palawan AWS",
+    "lat": 9.7333,
+    "lon": 118.7333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5126",
+    "site_name": "Juban Sorsogon Synoptic",
+    "lat": 12.85,
+    "lon": 123.9833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5128",
+    "site_name": "Legazpi AWS",
+    "lat": 13.1391,
+    "lon": 123.7436,
+    "source": "manual"
+  },
+  {
+    "site_id": "5129",
+    "site_name": "Milagros, Masbate AWS",
+    "lat": 12.2167,
+    "lon": 123.5,
+    "source": "manual"
+  },
+  {
+    "site_id": "5130",
+    "site_name": "Catarman Northern Samar AWS",
+    "lat": 12.4989,
+    "lon": 124.6375,
+    "source": "manual"
+  },
+  {
+    "site_id": "5131",
+    "site_name": "Tacloban, Leyte AWS",
+    "lat": 11.2444,
+    "lon": 125.0039,
+    "source": "manual"
+  },
+  {
+    "site_id": "5132",
+    "site_name": "Maasin, Southern Leyte AWS",
+    "lat": 10.1333,
+    "lon": 124.85,
+    "source": "manual"
+  },
+  {
+    "site_id": "5133",
+    "site_name": "Panglao, Bohol AWS",
+    "lat": 9.55,
+    "lon": 123.75,
+    "source": "manual"
+  },
+  {
+    "site_id": "5135",
+    "site_name": "Dalaguete, Cebu AWS",
+    "lat": 9.7612,
+    "lon": 123.5347,
+    "source": "manual"
+  },
+  {
+    "site_id": "5136",
+    "site_name": "Iloilo Radar Station AWS",
+    "lat": 10.7167,
+    "lon": 122.55,
+    "source": "manual"
+  },
+  {
+    "site_id": "5137",
+    "site_name": "Polillo Quezon",
+    "lat": 14.7167,
+    "lon": 121.9333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5138",
+    "site_name": "Mactan, Cebu AWS",
+    "lat": 10.306,
+    "lon": 124.009,
+    "source": "manual"
+  },
+  {
+    "site_id": "5139",
+    "site_name": "Argao, Cebu AWS",
+    "lat": 9.8833,
+    "lon": 123.6,
+    "source": "manual"
+  },
+  {
+    "site_id": "5140",
+    "site_name": "Surigao Synoptic Station AWS",
+    "lat": 9.7833,
+    "lon": 125.4833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5141",
+    "site_name": "Butuan, Agusan del Norte AWS",
+    "lat": 8.95,
+    "lon": 125.5333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5142",
+    "site_name": "Hinatuan, Surigao del Sur",
+    "lat": 8.3667,
+    "lon": 126.3333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5143",
+    "site_name": "Sindangan Zamboanga del Norte",
+    "lat": 8.2333,
+    "lon": 123.0,
+    "source": "manual"
+  },
+  {
+    "site_id": "5144",
+    "site_name": "Malaybalay Bukidnon AWS",
+    "lat": 8.15,
+    "lon": 125.1333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5145",
+    "site_name": "Maasim, Sarangani AWS",
+    "lat": 5.8667,
+    "lon": 125.0,
+    "source": "manual"
+  },
+  {
+    "site_id": "5146",
+    "site_name": "Marawi, Lanao del Sur AWS",
+    "lat": 7.9983,
+    "lon": 124.2928,
+    "source": "manual"
+  },
+  {
+    "site_id": "5147",
+    "site_name": "Davao City AWS",
+    "lat": 7.1907,
+    "lon": 125.4553,
+    "source": "manual"
+  },
+  {
+    "site_id": "5148",
+    "site_name": "Bago Oshiro, Talomo, Davao City AWS",
+    "lat": 7.1,
+    "lon": 125.5167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5149",
+    "site_name": "Gen. Santos City AWS",
+    "lat": 6.1167,
+    "lon": 125.1667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5150",
+    "site_name": "Kiamba, Sarangani AWS",
+    "lat": 5.9833,
+    "lon": 124.6167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5151",
+    "site_name": "Zamboanga City AWS",
+    "lat": 6.9167,
+    "lon": 122.0833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5152",
+    "site_name": "Narra, Palawan AWS",
+    "lat": 9.2667,
+    "lon": 118.4167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5155",
+    "site_name": "Calayan, Cagayan AWS",
+    "lat": 19.2667,
+    "lon": 121.4833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5156",
+    "site_name": "Pagudpud, Ilocos Norte AWS",
+    "lat": 18.55,
+    "lon": 120.7833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5157",
+    "site_name": "Bangui, Ilocos Norte",
+    "lat": 18.5333,
+    "lon": 120.7667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5160",
+    "site_name": "Dilasag, Aurora AWS",
+    "lat": 16.4,
+    "lon": 122.2167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5161",
+    "site_name": "Hermosa, Bataan AWS",
+    "lat": 14.8333,
+    "lon": 120.5167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5162",
+    "site_name": "Mulanay, Quezon AWS",
+    "lat": 13.5333,
+    "lon": 122.4,
+    "source": "manual"
+  },
+  {
+    "site_id": "5163",
+    "site_name": "Garchitorena, Camarines Sur AWS",
+    "lat": 13.8833,
+    "lon": 123.7,
+    "source": "manual"
+  },
+  {
+    "site_id": "5164",
+    "site_name": "Villaba, Leyte AWS",
+    "lat": 11.2167,
+    "lon": 124.3833,
+    "source": "manual"
+  },
+  {
+    "site_id": "5166",
+    "site_name": "Tuburan, Cebu AWS",
+    "lat": 10.7333,
+    "lon": 123.8333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5167",
+    "site_name": "Camotes Island, Poro, Cebu AWS",
+    "lat": 10.6333,
+    "lon": 124.4167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5169",
+    "site_name": "Himamaylan, Negros Occidental AWS",
+    "lat": 10.0833,
+    "lon": 122.8667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5170",
+    "site_name": "Cauayan, Negros Occidental AWS",
+    "lat": 9.9667,
+    "lon": 122.6167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5171",
+    "site_name": "Sagay, Negros Occidental AWS",
+    "lat": 10.9,
+    "lon": 123.4167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5174",
+    "site_name": "Lanuza, Surigao del Sur AWS",
+    "lat": 9.2333,
+    "lon": 126.0667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5175",
+    "site_name": "Loreto, Agusan del Sur AWS",
+    "lat": 8.1833,
+    "lon": 125.85,
+    "source": "manual"
+  },
+  {
+    "site_id": "5176",
+    "site_name": "Baganga, Davao Oriental AWS",
+    "lat": 7.5667,
+    "lon": 126.55,
+    "source": "manual"
+  },
+  {
+    "site_id": "5177",
+    "site_name": "Don Marcelino, Davao Occidental AWS",
+    "lat": 6.3167,
+    "lon": 125.65,
+    "source": "manual"
+  },
+  {
+    "site_id": "5178",
+    "site_name": "Esperanza, Sultan Kudarat AWS",
+    "lat": 6.7167,
+    "lon": 124.5167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5179",
+    "site_name": "Senator Ninoy Aquino, Sultan Kudarat AWS",
+    "lat": 6.4667,
+    "lon": 124.35,
+    "source": "manual"
+  },
+  {
+    "site_id": "5180",
+    "site_name": "Libungan, North Cotabato AWS",
+    "lat": 7.2333,
+    "lon": 124.5167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5181",
+    "site_name": "Glan, Sarangani AWS",
+    "lat": 5.8167,
+    "lon": 125.2,
+    "source": "manual"
+  },
+  {
+    "site_id": "5182",
+    "site_name": "Lanise, Claveria, Mis. Oriental",
+    "lat": 8.65,
+    "lon": 124.9,
+    "source": "manual"
+  },
+  {
+    "site_id": "5183",
+    "site_name": "Laguindingan, Misamis Oriental AWS",
+    "lat": 8.5833,
+    "lon": 124.45,
+    "source": "manual"
+  },
+  {
+    "site_id": "5184",
+    "site_name": "Musuan, Bukidnon AWS",
+    "lat": 7.8833,
+    "lon": 125.0667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5186",
+    "site_name": "Kabasalan, Zamboanga Sibugay AWS",
+    "lat": 7.8,
+    "lon": 122.7667,
+    "source": "manual"
+  },
+  {
+    "site_id": "5187",
+    "site_name": "La Libertad, Zamboanga del Norte AWS",
+    "lat": 8.45,
+    "lon": 123.55,
+    "source": "manual"
+  },
+  {
+    "site_id": "5188",
+    "site_name": "Sirawai, Zamboanga del Norte AWS",
+    "lat": 7.5833,
+    "lon": 122.15,
+    "source": "manual"
+  },
+  {
+    "site_id": "5189",
+    "site_name": "Pagadian City, Zamboanga del Sur AWS",
+    "lat": 7.8333,
+    "lon": 123.4333,
+    "source": "manual"
+  },
+  {
+    "site_id": "5190",
+    "site_name": "Dumingag, Zamboanga del Sur AWS",
+    "lat": 8.1667,
+    "lon": 123.35,
+    "source": "manual"
+  },
+  {
+    "site_id": "5191",
+    "site_name": "Pitogo, Zamboanga del Sur AWS",
+    "lat": 7.45,
+    "lon": 123.3167,
+    "source": "manual"
+  },
+  {
+    "site_id": "5192",
+    "site_name": "Tupi, South Cotabato AWS",
+    "lat": 6.35,
+    "lon": 124.95,
+    "source": "manual"
+  }
+]

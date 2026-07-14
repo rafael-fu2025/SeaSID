@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Send, RotateCcw } from 'lucide-react';
+import { Bot, Send, RotateCcw, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { SiteSelector } from '@/components/SiteSelector';
 import { cn } from '@/lib/utils';
 import { api, streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
@@ -31,23 +32,25 @@ function newMessageId() {
 /**
  * AgentFab — floating AI assistant.
  *
- *  - Anchored bottom-right as a single circular trigger.
- *  - Opens a shadcn Sheet (side=right) on click.
- *  - Sheet hosts a scrollable transcript and a sticky input row.
- *  - Listens for `seasid:open-agent` (dispatched by CommandPalette)
- *    so palette users can summon it without a click.
- *  - Uses the same `/api/v1/agent/chat` contract as before, just
- *    wrapped in a more polished container.
+ * Roadmap #10 polish (roadmap next-move backlog):
+ *  - Suggested prompts render as real <button>s that populate + send.
+ *  - Site context is visible + changeable inside the Sheet header via
+ *    SiteSelector (defaults to initialSiteKey from props).
+ *  - Composer hint matches actual behaviour: single-line <Input>, Enter
+ *    sends, Shift+Enter does NOT insert a newline (the previous hint
+ *    promised multiline support that did not exist).
+ *  - Reset confirms via window.confirm when the transcript is non-empty,
+ *    so a fat-finger click cannot wipe an in-progress conversation.
  */
 const PROMPTS = [
-  'Should I dive at Dauin tomorrow morning?',
+  'Should I dive at the current site tomorrow morning?',
   'Compare current conditions across both sites.',
-  'Generate a one-page safety briefing for Apo Island.',
+  'Generate a one-page safety briefing for the current site.',
 ];
 
 function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [open, setOpen] = useState(false);
-  const [siteKey] = useState(initialSiteKey);
+  const [siteKey, setSiteKey] = useState(initialSiteKey);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -68,9 +71,13 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     if (node) node.scrollTop = node.scrollHeight;
   }, [messages, busy]);
 
-  const send = async () => {
-    const text = draft.trim();
-    if (!text || busy) return;
+  /**
+   * Core send routine — pushes the user + assistant placeholders,
+   * opens the SSE stream, and patches the assistant message as events
+   * arrive. Exposed via ref so clickable prompt buttons can call it
+   * without re-rendering the FAB.
+   */
+  const sendRef = useRef(async (text) => {
     const userMsg = { id: newMessageId(), role: 'user', content: text };
     const assistantMsg = {
       id: newMessageId(),
@@ -80,17 +87,13 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
       toolCalls: [],
       status: 'streaming',
     };
-    setMessages([...messages, userMsg, assistantMsg]);
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setDraft('');
     setBusy(true);
 
     const controller = new AbortController();
     const think = makeThinkingState();
 
-    /**
-     * Helper: patch the assistant message in-place by id.
-     * `patch` is a Partial<UiMessage> or a function (prev) => Partial.
-     */
     const patchAssistant = (patch) => {
       setMessages((prev) => prev.map((m) => {
         if (m.id !== assistantMsg.id) return m;
@@ -166,8 +169,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             });
             break;
 
-          case 'done':
-            // Flush any leftover buffer to the appropriate lane.
+          case 'done': {
             const tail = flushThinking(think);
             if (tail.visible) {
               patchAssistant((prev) => ({
@@ -181,6 +183,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             }
             patchAssistant({ status: 'done' });
             break;
+          }
 
           case 'error':
             patchAssistant({
@@ -191,7 +194,6 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         }
       }
     } catch (err) {
-      // AbortError is a normal cancellation, not a UI error.
       if (err?.name === 'AbortError') {
         patchAssistant({ status: 'done' });
       } else {
@@ -200,6 +202,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     } finally {
       setBusy(false);
     }
+  });
+
+  // Keep the ref pointing at the latest closure so prompt buttons stay
+  // in sync without re-rendering them.
+  const send = (text) => {
+    const t = (text ?? draft).trim();
+    if (!t || busy) return;
+    return sendRef.current(t);
   };
 
   const onKey = (e) => {
@@ -210,6 +220,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   };
 
   const reset = () => {
+    // Confirm before discarding a non-empty transcript (roadmap #10).
+    if (messages.length > 0) {
+      // eslint-disable-next-line no-alert
+      const ok = window.confirm(
+        'Discard the current conversation? This cannot be undone.',
+      );
+      if (!ok) return;
+    }
     setMessages([]);
     setConversationId(null);
   };
@@ -239,48 +257,65 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         showCloseButton={false}
         className="flex h-full w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
       >
-        <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-border bg-card px-5 py-4">
-          <div className="flex min-w-0 items-center gap-3">
-            {/* Square bot avatar w/ live-status pulse on the bottom-right
-                corner so the user can tell at a glance that the agent
-                is online. Sits flush with the header so the agent
-                profile reads "own" rather than "decorative". */}
-            <div
-              className="relative flex size-10 shrink-0 items-center justify-center bg-reef text-reef-foreground"
-              aria-hidden
-            >
-              <Bot className="size-5" />
-              <span
-                className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_2px_var(--card)]"
-                data-testid="agent-status-dot"
-              />
+        <SheetHeader className="flex flex-col gap-3 border-b border-border bg-card px-5 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div
+                className="relative flex size-10 shrink-0 items-center justify-center bg-reef text-reef-foreground"
+                aria-hidden
+              >
+                <Bot className="size-5" />
+                <span
+                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_2px_var(--card)]"
+                  data-testid="agent-status-dot"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
+                <SheetDescription className="mt-0.5 text-xs leading-snug">
+                  7 tools · live briefing
+                </SheetDescription>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
-              <SheetDescription className="mt-0.5 text-xs leading-snug">
-                <span className="font-mono text-foreground">{siteKey}</span>
-                <span className="mx-1 text-muted-foreground/50">·</span>
-                7 tools · live briefing
-              </SheetDescription>
-            </div>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 shrink-0"
+                  onClick={reset}
+                  aria-label="Reset conversation"
+                  data-testid="agent-reset"
+                  disabled={messages.length === 0}
+                >
+                  <RotateCcw className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {messages.length === 0 ? 'Nothing to reset' : 'Reset conversation'}
+              </TooltipContent>
+            </Tooltip>
           </div>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-9 shrink-0"
-                onClick={reset}
-                aria-label="Reset conversation"
-                data-testid="agent-reset"
-                disabled={messages.length === 0}
-              >
-                <RotateCcw className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Reset conversation</TooltipContent>
-          </Tooltip>
+          {/* Site context selector (roadmap #10): visible + changeable
+              inside the Sheet so the user always knows which site the
+              next prompt will be sent against. */}
+          <div className="flex items-center gap-2" data-testid="agent-site-context">
+            <MapPin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+              Site
+            </span>
+            <div className="min-w-0 flex-1">
+              <SiteSelector
+                value={siteKey}
+                onChange={setSiteKey}
+                ariaLabel="Agent site context"
+                id="agent-site-selector"
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
         </SheetHeader>
 
         <div
@@ -289,7 +324,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           data-testid="agent-transcript"
         >
           {messages.length === 0 && !busy ? (
-            <EmptyState siteKey={siteKey} />
+            <EmptyState siteKey={siteKey} onPickPrompt={send} disabled={busy} />
           ) : (
             <div className="flex flex-col gap-3">
               {messages.map((m, i) => (
@@ -311,7 +346,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         <div className="border-t border-border bg-card p-3">
           <div className="flex items-center gap-2">
             <Input
-              placeholder="Ask about a site, conditions, alerts…"
+              placeholder={`Ask about ${siteKey}…`}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onKey}
@@ -320,7 +355,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
               className="flex-1"
             />
             <Button
-              onClick={send}
+              onClick={() => send()}
               disabled={busy || draft.trim() === ''}
               size="icon"
               data-testid="agent-send"
@@ -330,7 +365,9 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             </Button>
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Enter to send · Shift+Enter for newline</span>
+            {/* Hint matches actual behaviour: single-line composer, Enter
+                sends. No more misleading "Shift+Enter for newline". */}
+            <span>Enter to send</span>
             {conversationId && (
               <Badge variant="outline" className="font-mono text-[10px]">
                 {String(conversationId).slice(0, 8)}
@@ -343,7 +380,13 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   );
 }
 
-function EmptyState({ siteKey }) {
+function EmptyState({ siteKey, onPickPrompt, disabled }) {
+  // Personalise the prompts so the user knows the suggested questions
+  // apply to the currently selected site (visible in the header above).
+  const personalised = PROMPTS.map((p) =>
+    p.replace('the current site', siteKey).replace('across both sites', 'across both sites'),
+  );
+
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center">
       <div className="flex size-12 items-center justify-center rounded-full bg-reef/10 text-reef">
@@ -356,14 +399,20 @@ function EmptyState({ siteKey }) {
           Site pinned to <span className="font-mono text-foreground">{siteKey}</span>.
         </p>
       </div>
-      <div className="grid gap-1.5 text-left text-xs">
-        {PROMPTS.map((p) => (
-          <span
+      <div className="grid w-full gap-1.5 text-left text-xs">
+        {personalised.map((p, i) => (
+          <Button
             key={p}
-            className="rounded-md border border-border bg-card px-2.5 py-1 text-muted-foreground"
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onPickPrompt(p)}
+            disabled={disabled}
+            data-testid={`agent-prompt-${i}`}
+            className="h-auto justify-start whitespace-normal px-2.5 py-2 text-left font-normal"
           >
             {p}
-          </span>
+          </Button>
         ))}
       </div>
     </div>

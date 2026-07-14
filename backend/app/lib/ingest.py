@@ -29,13 +29,50 @@ from app.lib.tides import fetch_tides
 logger = logging.getLogger(__name__)
 
 
+def _naive_utc(ts):
+    """Strip timezone info from a datetime, normalising to naive UTC.
+
+    SQLite drops the ``tzinfo`` on read regardless of the
+    ``DateTime(timezone=True)`` column flag, so comparisons must use a
+    single representation. All callers in this module feed tz-aware
+    UTC datetimes on the write path and read back naive values, so we
+    normalise on both sides to avoid silent misses.
+    """
+    return ts.replace(tzinfo=None) if ts and ts.tzinfo else ts
+
+
+def _existing_ts(session, model, site_key: str, ts_values: list) -> set:
+    """Return the subset of ``ts_values`` already persisted for ``site_key``.
+
+    Used by the row-count fix (item 13): we filter against existing rows
+    before inserting so the reported count matches what actually gets
+    persisted, even when ``on_conflict_do_nothing`` silently drops
+    duplicates.
+    """
+    if not ts_values:
+        return set()
+
+    rows = session.query(model.ts).filter(
+        model.site_key == site_key,
+        model.ts.in_(ts_values),
+    ).all()
+    on_disk = {_naive_utc(ts) for (ts,) in rows if ts is not None}
+    return {ts for ts in (_naive_utc(t) for t in ts_values) if ts in on_disk}
+
+
 def _persist_weather(site_key: str, rows: list[dict]) -> int:
+    """Insert weather rows. Returns the count actually persisted."""
     if not rows:
         return 0
     session = db.SessionLocal()
-    inserted = 0
     try:
-        for row in rows:
+        ts_values = [row["ts"] for row in rows]
+        existing_ts = _existing_ts(session, db.WeatherObs, site_key, ts_values)
+        new_rows = [r for r in rows if _naive_utc(r["ts"]) not in existing_ts]
+        if not new_rows:
+            return 0
+
+        for row in new_rows:
             stmt = sqlite_upsert(db.WeatherObs).values(
                 site_key=site_key,
                 ts=row["ts"],
@@ -47,23 +84,28 @@ def _persist_weather(site_key: str, rows: list[dict]) -> int:
                 source=row.get("source"),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
-            inserted += 1
         session.commit()
+        return len(new_rows)
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
-    return inserted
 
 
 def _persist_marine(site_key: str, rows: list[dict]) -> int:
+    """Insert marine rows. Returns the count actually persisted."""
     if not rows:
         return 0
     session = db.SessionLocal()
-    inserted = 0
     try:
-        for row in rows:
+        ts_values = [row["ts"] for row in rows]
+        existing_ts = _existing_ts(session, db.MarineObs, site_key, ts_values)
+        new_rows = [r for r in rows if _naive_utc(r["ts"]) not in existing_ts]
+        if not new_rows:
+            return 0
+
+        for row in new_rows:
             stmt = sqlite_upsert(db.MarineObs).values(
                 site_key=site_key,
                 ts=row["ts"],
@@ -77,24 +119,37 @@ def _persist_marine(site_key: str, rows: list[dict]) -> int:
                 source=row.get("source"),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
-            inserted += 1
         session.commit()
+        return len(new_rows)
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
-    return inserted
 
 
 def _persist_air(site_key: str, snapshot: dict | None) -> int:
+    """Insert a single air-quality snapshot. Returns 1 if persisted, 0 if skipped."""
     if snapshot is None:
         return 0
     session = db.SessionLocal()
     try:
+        ts = snapshot["ts"]
+        # Pre-check to know whether the snapshot is new or already on disk.
+        existing = (
+            session.query(db.AirQualityObs)
+            .filter(
+                db.AirQualityObs.site_key == site_key,
+                db.AirQualityObs.ts == ts,
+            )
+            .first()
+        )
+        if existing is not None:
+            return 0
+
         stmt = sqlite_upsert(db.AirQualityObs).values(
             site_key=site_key,
-            ts=snapshot["ts"],
+            ts=ts,
             aqi=snapshot.get("aqi"),
             pm25=snapshot.get("pm25"),
             pm10=snapshot.get("pm10"),
@@ -108,22 +163,63 @@ def _persist_air(site_key: str, snapshot: dict | None) -> int:
             quality=snapshot.get("quality"),
             source=snapshot.get("source"),
         ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
-        session.execute(stmt)
+        result = session.execute(stmt)
         session.commit()
+        return result.rowcount if result.rowcount is not None else 1
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
-    return 1
 
 
-def ingest_site(site_key: str, hours: int = 48) -> dict:
+def _persist_tides(site_key: str, rows: list[dict]) -> int:
+    """Insert tide rows. Returns the count actually persisted."""
+    if not rows:
+        return 0
+    session = db.SessionLocal()
+    try:
+        ts_values = [row["ts"] for row in rows]
+        existing_ts = _existing_ts(session, db.TideObs, site_key, ts_values)
+        new_rows = [r for r in rows if _naive_utc(r["ts"]) not in existing_ts]
+        if not new_rows:
+            return 0
+
+        for row in new_rows:
+            stmt = sqlite_upsert(db.TideObs).values(
+                site_key=site_key,
+                ts=row["ts"],
+                height_m=row["height_m"],
+            ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
+            session.execute(stmt)
+        session.commit()
+        return len(new_rows)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def ingest_site(site_key: str, hours: int = 48, archive_days: int = 7) -> dict:
     """
     Pull weather + marine + air + tide data for a site and insert into DB.
     Uses INSERT OR IGNORE to handle duplicates gracefully.
 
-    Returns a dict with row counts per source.
+    Args:
+        site_key: registered site key.
+        hours: forward-looking window (default 48h). The provider's
+            ``fetch_hourly`` is also asked for the same number of hours in
+            the past (capped at 7d) so the LSTM 24h lookback is always
+            populated.
+        archive_days: how many days of historical weather to additionally
+            backfill via the Open-Meteo Archive endpoint (default 7). Set to
+            0 to skip the archive backfill.
+
+    Returns:
+        Dict with row counts per source. Counts reflect only rows actually
+        persisted (rows that conflict on the (site_key, ts) unique
+        constraint are NOT counted).
     """
     site = get_site(site_key)
     if site is None:
@@ -153,34 +249,40 @@ def ingest_site(site_key: str, hours: int = 48) -> dict:
 
     # ── Tides ──────────────────────────────────────────────────────────
     tide_rows = fetch_tides(lat, lon, length_seconds=hours * 3600)
-    tide_inserted = 0
+    tide_inserted = _persist_tides(site_key, tide_rows)
 
-    session = db.SessionLocal()
-    try:
-        for row in tide_rows:
-            stmt = sqlite_upsert(db.TideObs).values(
-                site_key=site_key,
-                ts=row["ts"],
-                height_m=row["height_m"],
-            ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
-            session.execute(stmt)
-            tide_inserted += 1
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+    # ── Archive backfill (optional) ────────────────────────────────────
+    archive_inserted = 0
+    if archive_days > 0:
+        try:
+            from datetime import datetime, timezone, timedelta
+            from app.lib.weather import fetch_archive
+
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=archive_days)
+            archive_rows = fetch_archive(
+                lat, lon,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+            )
+            # fetch_archive writes via a separate path, but it doesn't go
+            # through the dedupe-aware _persist_weather, so route through
+            # the same persistence path for consistency.
+            archive_inserted = _persist_weather(site_key, archive_rows)
+        except Exception as exc:
+            logger.warning("Archive backfill failed for %s: %s", site_key, exc)
 
     logger.info(
-        "Ingested site=%s: weather=%d marine=%d air=%d tide=%d",
-        site_key, weather_inserted, marine_inserted, air_inserted, tide_inserted,
+        "Ingested site=%s: weather=%d marine=%d air=%d tide=%d archive=%d",
+        site_key, weather_inserted, marine_inserted, air_inserted,
+        tide_inserted, archive_inserted,
     )
     return {
         "weather_rows": weather_inserted,
         "marine_rows": marine_inserted,
         "air_rows": air_inserted,
         "tide_rows": tide_inserted,
+        "archive_rows": archive_inserted,
     }
 
 
@@ -199,11 +301,18 @@ def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
 
     lat, lon = site["lat"], site["lon"]
     weather_rows = fetch_archive(lat, lon, start_date, end_date)
-    inserted = 0
+    if not weather_rows:
+        return {"weather_rows": 0}
 
     session = db.SessionLocal()
     try:
-        for row in weather_rows:
+        ts_values = [row["ts"] for row in weather_rows]
+        existing_ts = _existing_ts(session, db.WeatherObs, site_key, ts_values)
+        new_rows = [r for r in weather_rows if _naive_utc(r["ts"]) not in existing_ts]
+        if not new_rows:
+            return {"weather_rows": 0}
+
+        for row in new_rows:
             stmt = sqlite_upsert(db.WeatherObs).values(
                 site_key=site_key,
                 ts=row["ts"],
@@ -214,8 +323,8 @@ def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
                 sea_temp_c=row["sea_temp_c"],
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
-            inserted += 1
         session.commit()
+        inserted = len(new_rows)
     except Exception:
         session.rollback()
         raise
