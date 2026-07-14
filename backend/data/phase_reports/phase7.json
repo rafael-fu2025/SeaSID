@@ -1,0 +1,86 @@
+{
+  "captured_at": "2026-07-13T08:50:00Z",
+  "phase": "Phase 7 — Probability calibration (Platt / isotonic / identity)",
+  "files_changed": [
+    "backend/app/lib/calibration.py (NEW — Calibrator class, auto-selection, persistence)",
+    "backend/app/lib/model.py (added CALIBRATOR_PATH, get_calibrator(), reload_calibrator(); predict() applies calibrator)",
+    "backend/app/lib/freshness.py (model_version() now appends [cal-method] tag)",
+    "backend/scripts/train_calibrator.py (NEW — fits calibrator on time-aware holdout, persists to calibrator.pkl)",
+    "backend/data/calibrator.pkl (NEW — pickled identity calibrator)",
+    "backend/data/phase_reports/phase7_baseline.json (rule-based baseline ECE)",
+    "backend/tests/test_phase7_calibration.py (NEW — 16 regression tests)"
+  ],
+  "motivation": "When the model says '73% no-go', that should actually mean ~73% of historical days that scored 0.73 were no-go days. Most tree models and LSTM raw sigmoids are NOT well calibrated — they tend to be over-confident at the extremes. Phase 7 fixes this with a post-hoc calibrator trained on the time-aware holdout.",
+  "baseline_before_calibration": {
+    "n_labels_total": 138,
+    "n_train": 110,
+    "n_holdout": 28,
+    "train_date_range": ["2026-05-01", "2026-06-15"],
+    "holdout_date_range": ["2026-06-15", "2026-07-13"],
+    "holdout_positive_rate": 0.321,
+    "rules_auc": 0.687,
+    "rules_brier": 0.236,
+    "rules_ece": 0.191
+  },
+  "lstm_path_attempted": {
+    "note": "LSTM trained on 110 samples (49 positive); predictions on holdout were ANTI-calibrated (AUC 0.211, ECE 0.300). This is consistent with the Phase 3 tier gate (LSTM_MIN_SAMPLES=500, LSTM_MIN_AUC=0.65) which correctly rejects this model — and is exactly why the live model.selected_tier() falls back to rules. The calibrator was therefore fitted on the rules path, where the 28-sample holdout has only 3 unique probability values (0.10, 0.45, 0.85) and falls below the auto() minimum-sample threshold.",
+    "lstm_auc": 0.211,
+    "lstm_brier": 0.260,
+    "lstm_ece": 0.300,
+    "lstm_epochs_trained": 20
+  },
+  "calibrator_choice": {
+    "method": "identity",
+    "reason": "Holdout size (28) is below the auto() minimum (30), and the source probability has only 3 unique values (0.10/0.45/0.85) — Platt cannot fit a meaningful logistic on that and the empirical-bin isotonic would overfit. Returning identity is the honest answer; the infrastructure is in place and will engage automatically once labels cross the LSTM_MIN_SAMPLES=500 threshold (Phase 3).",
+    "n_fit": 0,
+    "version_string": "uncalibrated"
+  },
+  "infrastructure_added": {
+    "calibrator_module": "app.lib.calibration.Calibrator",
+    "auto_selection_logic": "Platt vs isotonic — lower Brier wins; falls back to identity on <30 samples or degenerate univariate input",
+    "persistence": "pickled to backend/data/calibrator.pkl via Calibrator.save / Calibrator.load",
+    "integration": "model.predict() applies Calibrator.predict(raw_p) before returning p_bad. model_version() appends [cal-identity|platt|isotonic] so operators can see calibration state at a glance.",
+    "training_script": "python -m scripts.train_calibrator [--use-lstm]"
+  },
+  "calibration_strategy_when_more_data_arrives": {
+    "phase_3_threshold": "Once LSTM_MIN_SAMPLES=500 is met, the LSTM path engages and produces continuous probabilities — Platt then becomes meaningful.",
+    "platt_vs_isotonic_choice": "Auto() picks the lower-Brier winner. Isotonic needs >=100 samples to avoid overfitting; below that we use Platt only.",
+    "retraining_cadence": "Re-run scripts/train_calibrator.py after every scripts/train_model.py invocation. Add to the operator's standard retrain loop.",
+    "monitoring": "ECE is logged in Calibrator.metrics and surfaced via the calibrator.version_string() baked into model_version."
+  },
+  "tests": {
+    "phase7_regression_count": 16,
+    "phase7_regression_status": "all passing",
+    "phase6_regression_count": 12,
+    "phase6_regression_status": "all passing",
+    "phase5_regression_count": 8,
+    "phase5_regression_status": "all passing",
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing",
+    "phase3_regression_count": 8,
+    "phase3_regression_status": "all passing",
+    "phase2_regression_count": 13,
+    "phase2_regression_status": "all passing",
+    "phase1_regression_count": 4,
+    "phase1_regression_status": "all passing",
+    "lstm_legacy_count": 8,
+    "lstm_legacy_status": "all passing",
+    "combined_regression_tests": "76/76 passing in 34s"
+  },
+  "key_phase7_tests": [
+    "test_calibrator_identity_passthrough — identity returns p_raw unchanged",
+    "test_platt_shifts_probabilities_toward_observed_rate — over-confident 0.95 -> ~0.05",
+    "test_platt_handles_extreme_probabilities — clamps p=0/p=1 without raising",
+    "test_isotonic_is_monotone — non-decreasing across inputs",
+    "test_auto_falls_back_to_identity_on_tiny_holdout — <30 samples => identity",
+    "test_auto_picks_platt_or_isotonic_when_enough_data — 200 samples => fitted calibrator",
+    "test_auto_uses_empirical_bin_for_univariate_input — rules with 3 unique probs => empirical isotonic",
+    "test_save_and_load_roundtrip — pickle preserves method + predict() output",
+    "test_ece_zero_for_perfectly_calibrated_model — ECE < 0.01 when conf==acc",
+    "test_ece_high_for_wildly_miscalibrated_model — ECE ~ 0.75 for conf=0.95, acc=0.20",
+    "test_predict_applies_persisted_calibrator — model.predict() reads calibrator.pkl",
+    "test_get_calibrator_returns_identity_when_no_file — missing pkl => identity passthrough",
+    "test_model_version_includes_calibrator_tag — version string ends with [cal-method]"
+  ],
+  "next_phase": "Phase 8 — Active-learning UI loop. When the model is uncertain (p_bad in 0.35–0.65), surface a 'confirm yesterday's conditions?' nudge on the dashboard so operators fill the highest-value gaps in the label corpus."
+}

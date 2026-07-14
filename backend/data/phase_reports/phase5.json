@@ -1,0 +1,48 @@
+{
+  "captured_at": "2026-07-13T02:45:00Z",
+  "phase": "Phase 5 — Richer label schema (no_go_reason + confidence)",
+  "files_changed": [
+    "backend/app/lib/db.py (added no_go_reason + confidence columns to NoDiveLabel and OperatorVerification)",
+    "backend/app/api/schemas.py (VerifyRequest + VerifyResponse + LabelEntry accept/surface new fields)",
+    "backend/app/api/services.py (submit_verification persists new fields, defaults reason='other' for non-dive, confidence='med'; date coercion for ISO strings; get_labels surfaces new fields)",
+    "backend/scripts/migrate_v23.py (idempotent ALTER TABLE migration)",
+    "frontend/src/pages/Verify.jsx (new 'Main reason' + 'Confidence' Selects in dialog; new columns in recent observations table; ConfidencePill component)",
+    "backend/tests/test_phase5_label_schema.py (8 regression tests)"
+  ],
+  "new_schema": {
+    "no_go_reason": "literal: viz | current | swell | weather | boat | other (nullable)",
+    "confidence": "literal: low | med | high (nullable, defaults to 'med')",
+    "applied_to": ["no_dive_labels", "operator_verifications"]
+  },
+  "defaults": {
+    "verdict_no_go_reason_default": "other (when verdict != 'dive' and operator didn't supply a reason)",
+    "verdict_dive_no_go_reason": "stays None (training signal not needed for clean dives)",
+    "confidence_default": "med"
+  },
+  "tests": {
+    "phase5_regression_count": 8,
+    "phase5_regression_status": "all passing",
+    "phase3_regression_count": 8,
+    "phase3_regression_status": "all passing",
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing",
+    "phase2_regression_count": 13,
+    "phase2_regression_status": "all passing",
+    "phase1_regression_count": 4,
+    "phase1_regression_status": "all passing",
+    "phase_lstm_legacy_count": 8,
+    "phase_lstm_legacy_status": "all passing",
+    "combined_regression_tests": "48/48 passing in 65s"
+  },
+  "bugs_found_and_fixed_in_phase_5": [
+    {
+      "issue": "Pydantic model_dump() serialises datetime.date as an ISO string, but the SQLAlchemy Date column rejects strings — submit_verification failed at ORM insertion",
+      "fix": "submit_verification now coerces the date field back to a datetime.date if it was passed as a string"
+    },
+    {
+      "issue": "Test_get_labels_surfaces_new_fields assumed DB state persisted across tests, but conftest wipes the DB between tests",
+      "fix": "Test now inserts a row before querying, so it doesn't depend on prior state"
+    }
+  ],
+  "next_phase": "Phase 6 — Scrape + crowdsource data flywheel (DiveViz / viz-app.com / PAGASA / dive shop social)"
+}

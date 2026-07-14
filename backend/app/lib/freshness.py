@@ -186,20 +186,31 @@ def model_version(bundle: dict | None) -> str:
 
     LSTM bundles carry ``config`` (with arch and seq_len) but no real
     version. We surface the model type + arch so operators can tell which
-    model produced the forecast. The cache file's mtime is appended as a
-    coarse identifier — enough to tell "this is the same model you trained
-    last Tuesday" without a full registry.
+    model produced the forecast. Phase 3: when no model qualifies its tier
+    gate, the version string makes that explicit ("rules-fallback-v1")
+    instead of silently appearing as if a rule-based fallback was an LSTM.
+
+    Phase 3: also calls out the active tier qualifier so the UI can show
+    "this model has AUC=0.55, below the 0.60 gate" in operator mode.
+
+    Phase 7: appends ``[cal-<method>]`` so operators can tell whether
+    the probability they're looking at has been calibrated.
     """
-    from app.lib.model import get_model_type
+    from app.lib.model import get_model_type, selected_tier, get_calibrator
+
+    tier, reason = selected_tier()
+
+    cal_tag = f"[cal-{get_calibrator().method}]"
 
     if bundle is None:
-        return "rule-based-v1"
+        return f"rules-fallback-v1 ({tier}: {reason}) {cal_tag}"
 
     model_type = get_model_type(bundle)
     if model_type == "lstm":
         arch = bundle.get("config", {}).get("arch", "lstm")
         seq_len = bundle.get("config", {}).get("seq_len", 24)
-        return f"lstm-{arch}-{seq_len}h-v1"
+        n = bundle.get("n_samples", 0)
+        return f"lstm-{arch}-{seq_len}h-{n}samp-v1 {cal_tag}"
     if model_type == "xgboost":
-        return "xgboost-v1"
-    return "rule-based-v1"
+        return f"xgboost-v1 ({tier}) {cal_tag}"
+    return f"rules-fallback-v1 ({tier}) {cal_tag}"

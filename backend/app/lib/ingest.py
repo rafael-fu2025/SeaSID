@@ -201,14 +201,25 @@ def _persist_tides(site_key: str, rows: list[dict]) -> int:
         session.close()
 
 
-def ingest_site(site_key: str, hours: int = 48) -> dict:
+def ingest_site(site_key: str, hours: int = 48, archive_days: int = 7) -> dict:
     """
     Pull weather + marine + air + tide data for a site and insert into DB.
     Uses INSERT OR IGNORE to handle duplicates gracefully.
 
-    Returns a dict with row counts per source. Counts reflect only rows
-    actually persisted (rows that conflict on the (site_key, ts) unique
-    constraint are NOT counted).
+    Args:
+        site_key: registered site key.
+        hours: forward-looking window (default 48h). The provider's
+            ``fetch_hourly`` is also asked for the same number of hours in
+            the past (capped at 7d) so the LSTM 24h lookback is always
+            populated.
+        archive_days: how many days of historical weather to additionally
+            backfill via the Open-Meteo Archive endpoint (default 7). Set to
+            0 to skip the archive backfill.
+
+    Returns:
+        Dict with row counts per source. Counts reflect only rows actually
+        persisted (rows that conflict on the (site_key, ts) unique
+        constraint are NOT counted).
     """
     site = get_site(site_key)
     if site is None:
@@ -240,15 +251,38 @@ def ingest_site(site_key: str, hours: int = 48) -> dict:
     tide_rows = fetch_tides(lat, lon, length_seconds=hours * 3600)
     tide_inserted = _persist_tides(site_key, tide_rows)
 
+    # ── Archive backfill (optional) ────────────────────────────────────
+    archive_inserted = 0
+    if archive_days > 0:
+        try:
+            from datetime import datetime, timezone, timedelta
+            from app.lib.weather import fetch_archive
+
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=archive_days)
+            archive_rows = fetch_archive(
+                lat, lon,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+            )
+            # fetch_archive writes via a separate path, but it doesn't go
+            # through the dedupe-aware _persist_weather, so route through
+            # the same persistence path for consistency.
+            archive_inserted = _persist_weather(site_key, archive_rows)
+        except Exception as exc:
+            logger.warning("Archive backfill failed for %s: %s", site_key, exc)
+
     logger.info(
-        "Ingested site=%s: weather=%d marine=%d air=%d tide=%d",
-        site_key, weather_inserted, marine_inserted, air_inserted, tide_inserted,
+        "Ingested site=%s: weather=%d marine=%d air=%d tide=%d archive=%d",
+        site_key, weather_inserted, marine_inserted, air_inserted,
+        tide_inserted, archive_inserted,
     )
     return {
         "weather_rows": weather_inserted,
         "marine_rows": marine_inserted,
         "air_rows": air_inserted,
         "tide_rows": tide_inserted,
+        "archive_rows": archive_inserted,
     }
 
 

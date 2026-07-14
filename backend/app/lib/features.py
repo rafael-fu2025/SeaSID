@@ -146,6 +146,69 @@ def build_sequence(
     return np.array(sequence, dtype=np.float32)
 
 
+def build_sequences_for_window(
+    site_key: str,
+    target_tses: list[datetime],
+    window_hours: int = 24,
+) -> np.ndarray:
+    """
+    Batched LSTM sequence builder.
+
+    Returns shape ``(len(target_tses), window_hours, len(FEATURE_COLUMNS))``.
+    Equivalent to calling ``build_sequence(site_key, ts, window_hours)`` once
+    per target_ts, but reuses the underlying weather/tide/marine/air DataFrames
+    across every sequence so the DB is queried 4 times total instead of
+    ``4 × len(target_tses) × window_hours`` times.
+
+    A previous Phase-0 implementation made ``build_features_for_window`` fetch
+    the data once, but the LSTM path was still calling ``build_sequence`` per
+    hour and re-running ``build_features`` (4 queries × 24 lookback hours = 96
+    queries per target hour). That made a 48-hour forecast ≈ 4,608 DB sessions
+    and was the dominant cause of the 30–50s page load (Phase 4 finding).
+    """
+    if not target_tses:
+        return np.zeros((0, window_hours, len(FEATURE_COLUMNS)), dtype=np.float32)
+
+    # Normalize target_tses to tz-aware UTC.
+    norm = []
+    for ts in target_tses:
+        if ts.tzinfo is None:
+            norm.append(ts.replace(tzinfo=timezone.utc))
+        else:
+            norm.append(ts)
+
+    # Compute the union window — we need every hour from
+    # (min(target) - window_hours - 48h padding) up to max(target).
+    pad_hours = 48  # weather window is 48h, tide/marine are 24h
+    earliest = min(norm) - timedelta(hours=window_hours + pad_hours)
+    latest = max(norm)
+
+    span_hours = int((latest - earliest).total_seconds() // 3600) + 1
+    # Single fetch for each table — union over the whole horizon.
+    weather_df = _fetch_weather_window(site_key, latest, hours=span_hours)
+    tide_df = _fetch_tide_window(site_key, latest, hours=span_hours)
+    marine_df = _fetch_marine_window(site_key, latest, hours=span_hours)
+    air_snapshot = _fetch_air_snapshot(site_key, latest)
+
+    # Filter once per (target, lookback-hour) pair using the in-memory DataFrames.
+    # This is the inner loop that used to open a DB session per call.
+    n_features = len(FEATURE_COLUMNS)
+    out = np.zeros((len(norm), window_hours, n_features), dtype=np.float32)
+    for i, ts in enumerate(norm):
+        for j in range(window_hours, 0, -1):
+            lookback_ts = ts - timedelta(hours=j)
+            try:
+                row = build_features_from_arrays(
+                    weather_df, tide_df, site_key, lookback_ts,
+                    marine_df=marine_df, air_snapshot=air_snapshot,
+                )
+                out[i, window_hours - j] = row.values[0]
+            except Exception:
+                # leave zeros — the per-hour fallback in services will handle it
+                pass
+    return out
+
+
 def build_features_from_arrays(
     weather_df: pd.DataFrame,
     tide_df: pd.DataFrame,

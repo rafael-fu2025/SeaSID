@@ -1,0 +1,9 @@
+date,site_key,label,actual_viz_m,actual_current,no_go_reason,confidence,comments
+2026-05-10,dauin_muck,dive,18.0,Low,,high,viz-app crowdsourced: diver-reported excellent viz, calm
+2026-05-18,dauin_muck,poor_viz,8.0,Moderate,current,med,viz-app crowdsourced: vis dropped mid-day
+2026-06-01,dauin_muck,dive,16.0,Low,,high,viz-app crowdsourced: clear and calm, two dives completed
+2026-06-08,dauin_muck,no_dive,3.0,High,weather,high,viz-app crowdsourced: storm all day, no boats ran
+2026-06-22,dauin_muck,dive,15.0,Low,,high,viz-app crowdsourced: nominal conditions
+2026-05-10,apo_reef,dive,20.0,Low,,high,viz-app crowdsourced: clear water, multiple boats
+2026-06-01,apo_reef,poor_viz,10.0,Moderate,current,med,viz-app crowdsourced: current running strong
+2026-06-22,apo_reef,dive,18.0,Low,,high,viz-app crowdsourced: perfect diving day

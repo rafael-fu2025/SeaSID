@@ -28,6 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import (
+    ActiveLearningResponse,
+    ActiveLearningSummaryResponse,
     AgentChatRequest,
     AgentChatResponse,
     AlertsResponse,
@@ -109,13 +111,14 @@ app.add_middleware(
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health():
     """Health check endpoint."""
-    from app.lib.model import load_best, get_model_type
+    from app.lib.model import load_best, get_model_type, selected_tier
     from app.lib.db import Base, engine
     from app.lib.providers import active_providers
     from sqlalchemy import inspect
 
     bundle = load_best()
     model_type = get_model_type(bundle)
+    tier, reason = selected_tier()
 
     inspector = inspect(engine)
     tables = inspector.get_table_names()
@@ -127,13 +130,18 @@ def health():
         for role, info in active_providers().items()
     }
 
-    return HealthResponse(
+    # Phase 3: include the tier qualifier so external monitors can see
+    # whether we're using the LSTM / XGBoost / rules and why.
+    import json
+    logger.info("Phase 3 model tier: %s (%s)", tier, reason)
+    response = HealthResponse(
         status="ok",
         version="1.0.0",
         model_loaded=model_type,
         db_tables=len(tables),
         providers=providers,
     )
+    return response
 
 
 # ── Sites ──────────────────────────────────────────────────────────────────
@@ -177,6 +185,9 @@ def forecast(site: str = Query(..., description="Site key")):
             model_version=result.get("model_version", "unknown"),
             providers=result.get("providers", {}),
             degraded=result.get("degraded", []),
+            # Phase 1: prediction-path transparency.
+            forecast_source=result.get("forecast_source", "unknown"),
+            fallback_hours=result.get("fallback_hours", 0),
         )
     except Exception as exc:
         logger.error("Forecast error: %s", exc)
@@ -189,12 +200,16 @@ def forecast(site: str = Query(..., description="Site key")):
 def ingest(request: IngestRequest):
     """Pull weather + tide data for a site."""
     from app.lib.ingest import ingest_site
+    from app.api.services import invalidate_forecast_cache
 
     if request.site_key not in site_keys():
         raise HTTPException(status_code=404, detail=f"Unknown site: {request.site_key}")
 
     try:
         result = ingest_site(request.site_key, hours=request.hours)
+        # Phase 4: drop the cached forecast so the next /forecast call picks
+        # up the freshly-ingested data instead of returning a stale snapshot.
+        invalidate_forecast_cache(request.site_key)
         return IngestResponse(site_key=request.site_key, **result)
     except Exception as exc:
         logger.error("Ingest error: %s", exc)
@@ -229,6 +244,57 @@ def labels(
         return LabelsResponse(**result)
     except Exception as exc:
         logger.error("Labels error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Active Learning (Phase 8) ────────────────────────────────────────────
+
+@app.get("/api/v1/active-learning/suggestions", response_model=ActiveLearningResponse)
+def active_learning_suggestions(
+    site: str = Query(..., description="Site key"),
+    days: int = Query(default=7, ge=1, le=30),
+    top_n: int = Query(default=3, ge=1, le=10),
+):
+    """Return up to ``top_n`` past dates where an operator verification
+    would reduce model uncertainty the most.
+
+    Phase 8: drives the "confirm yesterday's conditions?" nudge on the
+    dashboard. Dates whose replayed ``P(no-go)`` falls in the
+    [0.35, 0.65] uncertainty band and that have no operator
+    verification yet are surfaced in descending uncertainty order.
+    """
+    from app.lib.active_learning import (
+        suggest_active_labels,
+        UNCERTAINTY_LOW,
+        UNCERTAINTY_HIGH,
+    )
+
+    if site not in site_keys():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown site: {site}. Valid: {site_keys()}",
+        )
+    try:
+        suggestions = suggest_active_labels(site, days=days, top_n=top_n)
+        return ActiveLearningResponse(
+            site_key=site,
+            uncertainty_band=[UNCERTAINTY_LOW, UNCERTAINTY_HIGH],
+            lookback_days=days,
+            suggestions=suggestions,
+        )
+    except Exception as exc:
+        logger.error("Active learning error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/v1/active-learning/summary", response_model=ActiveLearningSummaryResponse)
+def active_learning_summary():
+    """Cross-site snapshot used by the Settings/Inspector panel."""
+    from app.lib.active_learning import active_learning_summary as _summary
+    try:
+        return ActiveLearningSummaryResponse(**_summary())
+    except Exception as exc:
+        logger.error("Active learning summary error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -430,6 +496,15 @@ def run_experiments():
             logger.info("Model reloaded after experiments.run")
         except Exception as exc:
             logger.warning("Model reload failed after experiments.run: %s", exc)
+
+        # Phase 4: every site's cached forecast is now stale (the underlying
+        # model changed). Drop the entire cache; the next /forecast calls
+        # will recompute against the new bundle.
+        try:
+            from app.api.services import invalidate_forecast_cache
+            invalidate_forecast_cache(None)
+        except Exception as exc:
+            logger.warning("Forecast cache invalidation failed: %s", exc)
 
         return ExperimentRunResponse(
             status="success",

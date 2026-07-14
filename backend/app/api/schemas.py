@@ -19,6 +19,10 @@ class ForecastHour(BaseModel):
     viz_label: str
     current_risk: str
     model_used: str
+    # Phase 1: when this hour fell back to rule-based scoring because the
+    # ML model crashed (e.g. feature-schema mismatch), the reason is here.
+    # None when the ML prediction succeeded.
+    degraded_reason: str | None = None
 
 
 class OptimalWindow(BaseModel):
@@ -35,6 +39,12 @@ class ForecastResponse(BaseModel):
     hours: list[ForecastHour]
     optimal_window: OptimalWindow | None = None
     ml_bundle_loaded: bool = False
+    # Phase 1: which prediction path served the response.
+    # "lstm" / "xgboost" / "rule_based" — or "*+rules_fallback" when the ML
+    # model crashed and the API substituted rules. ``fallback_hours`` is the
+    # number of hours that needed the substitution.
+    forecast_source: str = "unknown"
+    fallback_hours: int = 0
     # Optional AQICN snapshot — present only when the site has live air data.
     # Without this field Pydantic would silently drop the value assigned in
     # `services.get_forecast()`, leaving air-quality consumers in the dark.
@@ -75,6 +85,7 @@ class IngestResponse(BaseModel):
     marine_rows: int = 0
     air_rows: int = 0
     tide_rows: int = 0
+    archive_rows: int = 0
 
 
 # ── Operator Verify ────────────────────────────────────────────────────────
@@ -87,6 +98,11 @@ class VerifyRequest(BaseModel):
     actual_viz_m: float | None = None
     actual_current: Literal["Low", "Moderate", "High"] | None = None
     comments: str | None = None
+    # Phase 5: structured reason + operator confidence. Both optional so
+    # the existing verify form keeps working until the UI ships the new
+    # fields. ``no_go_reason`` is most useful when verdict != "dive".
+    no_go_reason: Literal["viz", "current", "swell", "weather", "boat", "other"] | None = None
+    confidence: Literal["low", "med", "high"] | None = None
 
 
 class VerifyResponse(BaseModel):
@@ -95,6 +111,8 @@ class VerifyResponse(BaseModel):
     date: str
     verdict: str
     message: str
+    no_go_reason: str | None = None
+    confidence: str | None = None
 
 
 # ── Labels ─────────────────────────────────────────────────────────────────
@@ -106,6 +124,9 @@ class LabelEntry(BaseModel):
     actual_viz_m: float | None = None
     actual_current: str | None = None
     comments: str | None = None
+    # Phase 5: structured fields surfaced to operators and the agent.
+    no_go_reason: str | None = None
+    confidence: str | None = None
 
 
 class LabelsResponse(BaseModel):
@@ -178,6 +199,41 @@ class ExperimentRunResponse(BaseModel):
     status: str
     message: str
     results: dict | None = None
+
+
+# ── Active Learning (Phase 8) ────────────────────────────────────────────
+
+class ActiveLearningSuggestion(BaseModel):
+    """One candidate date where an operator verification is most valuable.
+
+    The UI surfaces these as in-app nudges ("the model said 47% on
+    Tuesday — was that right?"). On confirm, the existing /verify
+    endpoint records the answer and the suggestion is dismissed.
+    """
+    site_key: str
+    date: str
+    p_bad: float
+    uncertainty: float
+    model_source: str
+    rank: int
+    reason: str
+
+
+class ActiveLearningResponse(BaseModel):
+    site_key: str
+    uncertainty_band: list[float]
+    lookback_days: int
+    suggestions: list[ActiveLearningSuggestion]
+
+
+class ActiveLearningSummaryResponse(BaseModel):
+    """Cross-site snapshot for the Settings/Inspector panel."""
+    uncertainty_band: list[float]
+    lookback_days: int
+    top_n: int
+    calibrator_method: str
+    per_site: dict[str, int]
+    total: int
 
 
 # ── Health ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,77 @@
+{
+  "captured_at": "2026-07-13T03:45:00Z",
+  "phase": "Phase 6 — Data flywheel (scrapers + crowdsource + archive synthesis)",
+  "files_changed": [
+    "backend/app/lib/scrapers/__init__.py (registry, exports)",
+    "backend/app/lib/scrapers/base.py (BaseScraper + ScraperResult + register_scraper + run_all with INSERT-OR-IGNORE upsert)",
+    "backend/app/lib/scrapers/open_meteo_archive.py (rule-based labelling on 90d of historical weather)",
+    "backend/app/lib/scrapers/pagasa_synop.py (CSV-seeded PAGASA daily summaries; stdlib csv parsing)",
+    "backend/app/lib/scrapers/viz_apps.py (VizAppScraper + DiveVizScraper with CSV fallback)",
+    "backend/scripts/expand_with_scraping.py (orchestrator CLI: --scrapers --sites --days --list --json)",
+    "backend/data/pagasa_seed.csv (12 PAGASA-style rows: 6 dauin_muck + 6 apo_reef, May-July)",
+    "backend/data/viz_app_seed.csv (8 viz-app crowdsourced rows)",
+    "backend/data/diveviz_seed.csv (8 diveviz operator-log rows)",
+    "backend/tests/test_phase6_scrapers.py (11 regression tests)"
+  ],
+  "registered_scrapers": [
+    "archive_synthetic",
+    "pagasa_synop",
+    "viz_app",
+    "diveviz"
+  ],
+  "data_flywheel_result_after_first_run": {
+    "labels_before_phase6": 104,
+    "labels_after_phase6_run": 136,
+    "growth": "+32 (+30%)",
+    "sources": {
+      "seed": 102,
+      "archive_synthetic_archive": 8,
+      "diveviz_diveviz": 8,
+      "pagasa_synop_synop": 8,
+      "viz_app_viz_app": 8,
+      "operator_Test Operator": 2
+    }
+  },
+  "bugs_found_and_fixed": [
+    {
+      "issue": "Orchestrator used per-row dedupe SELECT — O(N) queries and didn't dedupe within a single batch, causing IntegrityError on duplicate (site, date, source) within the same scraper run.",
+      "fix": "Switched to SQLite INSERT ... ON CONFLICT DO NOTHING with rowcount to compute inserted vs skipped in a single statement."
+    },
+    {
+      "issue": "PAGASA scraper used naive line.split(',') which broke on comments containing commas (e.g. 'calm day, dive conditions nominal').",
+      "fix": "Switched to the stdlib csv module with DictReader."
+    },
+    {
+      "issue": "PAGASA scraper didn't filter by site_key — when CSV had rows for both dauin_muck and apo_reef, fetch('dauin_muck') returned all rows.",
+      "fix": "Added up-front site_key filter so each fetch only returns rows for the requested site."
+    },
+    {
+      "issue": "Initial CSV didn't quote fields with embedded commas, so 4 of 6 dauin_muck rows were silently dropped by the parser.",
+      "fix": "Quoted all comments fields in the seed CSVs."
+    }
+  ],
+  "tests": {
+    "phase6_regression_count": 11,
+    "phase6_regression_status": "all passing",
+    "phase5_regression_count": 8,
+    "phase5_regression_status": "all passing",
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing",
+    "phase3_regression_count": 8,
+    "phase3_regression_status": "all passing",
+    "phase2_regression_count": 13,
+    "phase2_regression_status": "all passing",
+    "phase1_regression_count": 4,
+    "phase1_regression_status": "all passing",
+    "phase_lstm_legacy_count": 8,
+    "phase_lstm_legacy_status": "all passing",
+    "combined_regression_tests": "59/59 passing in 95s"
+  },
+  "how_to_extend_phase6": [
+    "Drop real PAGASA exports into data/pagasa_seed.csv (schema documented in scraper docstring).",
+    "Replace VizAppScraper / DiveVizScraper CSV fallback with browser automation (Playwright / Selenium) once client-side rendering is understood.",
+    "Add an NOAA NDBC buoy scraper (NDBC publishes realtime + historical text files at ndbc.noaa.gov) for raw wave + swell data.",
+    "Wire scrapers into a Windows Task Scheduler or GitHub Action cron for daily ingestion."
+  ],
+  "next_phase": "Phase 7 — Calibration (Platt / isotonic on holdout to make '73% probability' actually mean 73% historical accuracy at that confidence level)"
+}

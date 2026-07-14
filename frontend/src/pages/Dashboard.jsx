@@ -11,6 +11,7 @@ import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
 import { ForecastProvenance } from '@/components/ForecastProvenance';
+import ActiveLearningNudge from '@/components/ActiveLearningNudge';
 import { cn } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
@@ -170,6 +171,16 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Phase 8: Active-learning nudge — surfaces past dates where the
+          model was uncertain (p_bad in [0.35, 0.65]) and an operator
+          confirmation would teach the most. */}
+      {!loading && selectedSite && (
+        <ActiveLearningNudge
+          siteKey={selectedSite}
+          onVerified={() => load(selectedSite)}
+        />
       )}
 
       {/* Loading skeletons */}

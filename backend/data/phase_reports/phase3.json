@@ -1,0 +1,53 @@
+{
+  "captured_at": "2026-07-13T02:10:00Z",
+  "phase": "Phase 3 — tiered model selection (LSTM → XGBoost → rules)",
+  "files_changed": [
+    "backend/app/lib/model.py (load_best() now evaluates tier gates; new selected_tier() and tier_diagnostics(); reload() resets all globals)",
+    "backend/app/lib/freshness.py (model_version surfaces active tier + reason)",
+    "backend/app/lib/model_xgb.py (saves auc_roc alongside cv_accuracy/cv_f1)",
+    "backend/app/api/main.py (health endpoint stays compatible with rules tier)",
+    "backend/tests/test_phase3_tier_selection.py (8 regression tests)",
+    "backend/tests/test_phase1_fallback.py (test_no_fallback_when_predict_succeeds updated for Phase 3 tier semantics)"
+  ],
+  "tier_thresholds": {
+    "LSTM_MIN_SAMPLES": 500,
+    "LSTM_MIN_AUC": 0.65,
+    "XGB_MIN_AUC": 0.60
+  },
+  "current_selection": {
+    "loaded_bundle": null,
+    "selected_tier": "rule_based",
+    "selection_reason": "no ML bundle qualified its tier gate",
+    "diagnostics": {
+      "lstm": "lstm: n_samples=104 < 500 (Phase 2 retrain)",
+      "xgboost": "xgboost: n_samples=600, auc/cv_accuracy=0.520 < 0.60 (Phase 3 retrain)"
+    }
+  },
+  "live_forecast_after_phase3": {
+    "dauin_muck_12h_cold_ms": 1438,
+    "dauin_muck_12h_warm_ms": 0.07,
+    "forecast_source": "rule_based",
+    "model_version": "rules-fallback-v1 (rule_based: no ML bundle qualified its tier gate)",
+    "p_bad_for_high_risk_hour": 0.85,
+    "p_bad_matches_agent": true
+  },
+  "bug_found_during_phase_3": {
+    "issue": "global _lstm_rejection_reason, _xgb_rejection_reason were missing from the global declaration in load_best(). Python created local variables instead of mutating the module globals, so tier_diagnostics() always returned 'qualified' even after a rejection.",
+    "fix": "Added the missing globals to the global declaration. Now tier_diagnostics() correctly surfaces per-tier rejection reasons.",
+    "tests_caught_it": "test_tier1_lstm_rejected_for_too_few_samples, test_tier2_xgboost_rejected_for_low_auc"
+  },
+  "tests": {
+    "phase3_regression_count": 8,
+    "phase3_regression_status": "all passing",
+    "phase2_regression_count": 13,
+    "phase2_regression_status": "all passing",
+    "phase4_regression_count": 7,
+    "phase4_regression_status": "all passing",
+    "phase1_regression_count": 4,
+    "phase1_regression_status": "all passing",
+    "phase_lstm_legacy_count": 8,
+    "phase_lstm_legacy_status": "all passing",
+    "combined_regression_tests": "40/40 passing in 80s"
+  },
+  "next_phase": "Phase 5 — Richer label schema (no_go_reason + confidence on operator verifications)"
+}

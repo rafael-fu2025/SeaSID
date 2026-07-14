@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-07-13T08:40:29.367605",
+  "phase": "Phase 7 baseline (before calibrator)",
+  "n_total_labels": 138,
+  "n_train": 110,
+  "n_holdout": 28,
+  "train_date_range": [
+    "2026-05-01",
+    "2026-06-15"
+  ],
+  "holdout_date_range": [
+    "2026-06-15",
+    "2026-07-13"
+  ],
+  "holdout_positive_rate": 0.32142857142857145,
+  "rule_based": {
+    "auc": 0.6871345029239766,
+    "brier": 0.235625,
+    "ece": 0.19107142857142856
+  }
+}

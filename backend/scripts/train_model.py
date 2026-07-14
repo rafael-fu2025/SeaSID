@@ -56,6 +56,7 @@ def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarr
     X_rows = []
     y_vals = []
     X_seqs = []
+    label_dates = []
     skipped = 0
 
     for lbl in labels:
@@ -75,6 +76,8 @@ def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarr
 
             # Binary label
             y_vals.append(label_to_binary(lbl.label))
+            # Phase 2: capture the date so train_lstm can do a time-aware split.
+            label_dates.append(lbl.date)
         except Exception as exc:
             skipped += 1
             continue
@@ -90,7 +93,7 @@ def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarr
     print(f"Training data: {len(X_flat)} samples, {int(y.sum())} positive (no-go), "
           f"{int(len(y) - y.sum())} negative (go)")
 
-    return X_flat, y, X_seq, y_arr
+    return X_flat, y, X_seq, y_arr, label_dates
 
 
 def train_xgboost(X: pd.DataFrame, y: pd.Series) -> dict:
@@ -111,7 +114,7 @@ def train_xgboost(X: pd.DataFrame, y: pd.Series) -> dict:
     return result.metrics
 
 
-def train_lstm_model(X_seq: np.ndarray, y: np.ndarray) -> dict:
+def train_lstm_model(X_seq: np.ndarray, y: np.ndarray, label_dates: list | None = None) -> dict:
     """Train LSTM primary model."""
     from app.lib.model_lstm import train_lstm, save_lstm, LSTMTrainConfig
 
@@ -126,7 +129,7 @@ def train_lstm_model(X_seq: np.ndarray, y: np.ndarray) -> dict:
         max_epochs=100,
         patience=10,
     )
-    result = train_lstm(X_seq, y, config)
+    result = train_lstm(X_seq, y, config, label_dates=label_dates)
     save_lstm(result, LSTM_MODEL_PATH, DATA_DIR / "lstm_metrics.json")
 
     print(f"  Samples: {result.n_samples}")
@@ -147,7 +150,7 @@ def main():
     args = parser.parse_args()
 
     init_db()
-    X_flat, y, X_seq, y_arr = _load_training_data()
+    X_flat, y, X_seq, y_arr, label_dates = _load_training_data()
 
     all_metrics = {}
 
@@ -156,7 +159,7 @@ def main():
         all_metrics["xgboost"] = xgb_metrics
 
     if not args.xgb_only:
-        lstm_metrics = train_lstm_model(X_seq, y_arr)
+        lstm_metrics = train_lstm_model(X_seq, y_arr, label_dates=label_dates)
         all_metrics["lstm"] = lstm_metrics
 
     # Save combined metrics

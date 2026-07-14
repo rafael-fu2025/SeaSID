@@ -29,7 +29,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ── Model architecture ────────────────────────────────────────────────────
 
 class LSTMPredictor(nn.Module):
-    """LSTM-based binary classifier for dive condition prediction."""
+    """LSTM-based binary classifier for dive condition prediction.
+
+    Phase 2 fix: the final activation is now ``Linear`` (raw logits) instead
+    of ``Sigmoid``. Pairing this with ``BCEWithLogitsLoss`` is numerically
+    stable and lets gradients flow even when the logit is far from zero —
+    the previous Sigmoid+BCELoss combo was the root cause of the LSTM
+    collapsing to 0.5 on the 78-sample dataset (Phase 0 finding).
+    """
 
     def __init__(
         self,
@@ -51,18 +58,21 @@ class LSTMPredictor(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(32, 1),
-            nn.Sigmoid(),
+            # No Sigmoid here — see class docstring.
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass. x shape: (batch, seq_len, input_size)."""
+        """Forward pass. x shape: (batch, seq_len, input_size). Returns logits."""
         lstm_out, _ = self.lstm(x)
         last_hidden = lstm_out[:, -1, :]  # take last timestep
         return self.classifier(last_hidden).squeeze(-1)
 
 
 class GRUPredictor(nn.Module):
-    """GRU variant for ablation comparison."""
+    """GRU variant for ablation comparison.
+
+    Phase 2 fix: removed final Sigmoid for the same reason as LSTMPredictor.
+    """
 
     def __init__(
         self,
@@ -84,7 +94,6 @@ class GRUPredictor(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(32, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -107,6 +116,10 @@ class LSTMTrainConfig:
     patience: int = 10
     weight_decay: float = 1e-4
     arch: Literal["lstm", "gru"] = "lstm"
+    # Phase 2: pos_weight for BCEWithLogitsLoss. Default 1.0 disables the
+    # class balancing; the trainer computes the optimal value from the label
+    # ratio when left at None. Set explicitly to a float to override.
+    pos_weight: float | None = None
 
 
 @dataclass
@@ -127,6 +140,7 @@ def train_lstm(
     X_sequences: np.ndarray,
     y: np.ndarray,
     config: LSTMTrainConfig | None = None,
+    label_dates: list | None = None,
 ) -> LSTMTrainingResult:
     """
     Train an LSTM/GRU model on sequence data.
@@ -135,6 +149,12 @@ def train_lstm(
         X_sequences: shape (n_samples, seq_len, n_features)
         y: shape (n_samples,) binary labels
         config: training hyperparameters
+        label_dates: optional list of ``datetime.date`` / ISO strings in the
+            same order as ``y``. When provided, the train/val split is
+            time-aware (earliest 85% train, latest 15% val) instead of a
+            random shuffle. Phase 2: random shuffle leaks future weather
+            into training because consecutive days share 23 of 24 lookback
+            hours.
 
     Returns:
         LSTMTrainingResult with trained model, scaler, metrics, and loss history
@@ -154,12 +174,37 @@ def train_lstm(
     X_flat = X_sequences.reshape(-1, n_features)
     X_scaled = scaler.fit_transform(X_flat).reshape(original_shape)
 
-    # ── Train/val split (85/15 of training data) ───────────────────────
-    split_idx = max(1, int(n_samples * 0.85))
-    indices = np.random.RandomState(42).permutation(n_samples)
-
-    train_idx = indices[:split_idx]
-    val_idx = indices[split_idx:]
+    # ── Train/val split ────────────────────────────────────────────────
+    # Phase 2: time-aware split when label_dates is supplied. Without
+    # dates we fall back to a deterministic random shuffle (legacy tests).
+    if label_dates is not None and len(label_dates) == n_samples:
+        from datetime import date as _date
+        # Sort indices by date — earliest train, latest val.
+        parsed: list[tuple[int, _date]] = []
+        for i, d in enumerate(label_dates):
+            if isinstance(d, str):
+                parsed.append((i, _date.fromisoformat(d)))
+            elif isinstance(d, _date):
+                parsed.append((i, d))
+            else:
+                parsed = None
+                break
+        if parsed is not None:
+            parsed.sort(key=lambda x: x[1])
+            sorted_indices = [i for i, _ in parsed]
+            split_idx = max(1, int(n_samples * 0.85))
+            train_idx = np.array(sorted_indices[:split_idx])
+            val_idx = np.array(sorted_indices[split_idx:])
+        else:
+            split_idx = max(1, int(n_samples * 0.85))
+            indices = np.random.RandomState(42).permutation(n_samples)
+            train_idx = indices[:split_idx]
+            val_idx = indices[split_idx:]
+    else:
+        split_idx = max(1, int(n_samples * 0.85))
+        indices = np.random.RandomState(42).permutation(n_samples)
+        train_idx = indices[:split_idx]
+        val_idx = indices[split_idx:]
 
     X_train = torch.FloatTensor(X_scaled[train_idx]).to(DEVICE)
     y_train = torch.FloatTensor(y[train_idx]).to(DEVICE)
@@ -189,7 +234,21 @@ def train_lstm(
             dropout=config.dropout,
         ).to(DEVICE)
 
-    criterion = nn.BCELoss()
+    # Phase 2: BCEWithLogitsLoss replaces BCELoss so the model's raw logits
+    # feed directly into the loss. We compute pos_weight from the training
+    # labels unless the config overrides it — this stops the model from
+    # ignoring the minority class (40+ positives vs 60+ negatives in the
+    # current dataset).
+    n_pos = float(y.sum())
+    n_neg = float(len(y) - n_pos)
+    if config.pos_weight is None:
+        if n_pos == 0 or n_neg == 0:
+            pw_tensor = torch.tensor([1.0], device=DEVICE)
+        else:
+            pw_tensor = torch.tensor([n_neg / n_pos], device=DEVICE)
+    else:
+        pw_tensor = torch.tensor([float(config.pos_weight)], device=DEVICE)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config.lr,
@@ -261,6 +320,7 @@ def train_lstm(
     metrics["final_train_loss"] = train_losses[-1] if train_losses else None
     metrics["n_samples"] = n_samples
     metrics["arch"] = config.arch
+    metrics["pos_weight"] = float(pw_tensor.item())
 
     model = model.cpu()
 
@@ -284,13 +344,19 @@ def _compute_metrics(
     y: np.ndarray,
     config: LSTMTrainConfig,
 ) -> dict:
-    """Compute classification metrics on the full dataset."""
+    """Compute classification metrics on the full dataset.
+
+    Phase 2 fix: the model now returns raw logits (no final Sigmoid), so we
+    apply ``torch.sigmoid`` here before thresholding for accuracy/F1/AUC.
+    """
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
     model.eval()
     with torch.no_grad():
         X_tensor = torch.FloatTensor(X_scaled).to(DEVICE)
-        proba = model(X_tensor).cpu().numpy()
+        logits = model(X_tensor).cpu().numpy()
+    # Map logits → probabilities for downstream metrics.
+    proba = 1.0 / (1.0 + np.exp(-logits))
 
     preds = (proba >= 0.5).astype(int)
 
@@ -319,16 +385,21 @@ def save_lstm(result: LSTMTrainingResult, model_path: Path, metrics_path: Path) 
     """Save the trained LSTM model, scaler, and config."""
     import json
 
+    save_config = {
+        "seq_len": result.config.seq_len,
+        "hidden_size": result.config.hidden_size,
+        "num_layers": result.config.num_layers,
+        "dropout": result.config.dropout,
+        "arch": result.config.arch,
+    }
+    # Persist pos_weight so a reload+continue training works later.
+    if result.config.pos_weight is not None:
+        save_config["pos_weight"] = float(result.config.pos_weight)
+
     torch.save({
         "model_state_dict": result.model.state_dict(),
         "scaler": result.scaler,
-        "config": {
-            "seq_len": result.config.seq_len,
-            "hidden_size": result.config.hidden_size,
-            "num_layers": result.config.num_layers,
-            "dropout": result.config.dropout,
-            "arch": result.config.arch,
-        },
+        "config": save_config,
         "feature_columns": result.feature_columns,
         "n_samples": result.n_samples,
         "model_type": "lstm",
@@ -395,6 +466,10 @@ def predict_proba_lstm(bundle: dict, X_seq: np.ndarray) -> np.ndarray:
     """
     Return P(no-go) for each sequence in X_seq.
 
+    Phase 2 fix: the model now outputs raw logits (no final Sigmoid), so
+    this function applies ``torch.sigmoid`` at inference time to return
+    a proper probability in [0, 1].
+
     Args:
         bundle: loaded model bundle from load_lstm()
         X_seq: shape (n_samples, seq_len, n_features) or (seq_len, n_features) for single
@@ -416,6 +491,17 @@ def predict_proba_lstm(bundle: dict, X_seq: np.ndarray) -> np.ndarray:
     model.eval()
     with torch.no_grad():
         X_tensor = torch.FloatTensor(X_scaled)
-        proba = model(X_tensor).numpy()
+        logits = model(X_tensor)
+        proba = torch.sigmoid(logits).numpy()
 
     return proba
+
+
+def predict_proba_lstm_batch(bundle: dict, X_seq: np.ndarray) -> np.ndarray:
+    """Convenience alias for ``predict_proba_lstm`` — emphasises batched inference.
+
+    Phase 4 surfaces this so the services layer can call it explicitly when
+    it has already built a full ``(n_hours, seq_len, n_features)`` array via
+    ``build_sequences_for_window``. Identical behaviour; clearer intent.
+    """
+    return predict_proba_lstm(bundle, X_seq)

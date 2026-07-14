@@ -1,0 +1,107 @@
+{
+  "captured_at": "2026-07-12T15:44:54Z",
+  "sites": {
+    "dauin_muck": {
+      "elapsed_ms": 49317.1,
+      "forecast_source": "rules_fallback",
+      "fallback_hours": 48,
+      "n_hours": 48,
+      "p_bad_min": 0.85,
+      "p_bad_max": 0.85,
+      "p_bad_mean": 0.85,
+      "p_bad_unique": [
+        0.85
+      ],
+      "optimal_window": {
+        "ts": "2026-07-12T15:00:00+00:00",
+        "risk": "HIGH RISK",
+        "p_bad": 0.85,
+        "viz_label": "Poor",
+        "current_risk": "High",
+        "model_used": "rules_fallback",
+        "degraded_reason": "ml_predict_failed: ValueError"
+      },
+      "first_3_hours": [
+        {
+          "ts": "2026-07-12T15:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Poor",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        },
+        {
+          "ts": "2026-07-12T16:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Poor",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        },
+        {
+          "ts": "2026-07-12T17:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Poor",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        }
+      ],
+      "degraded_top_level": []
+    },
+    "apo_reef": {
+      "elapsed_ms": 33813.5,
+      "forecast_source": "rules_fallback",
+      "fallback_hours": 48,
+      "n_hours": 48,
+      "p_bad_min": 0.85,
+      "p_bad_max": 0.85,
+      "p_bad_mean": 0.85,
+      "p_bad_unique": [
+        0.85
+      ],
+      "optimal_window": {
+        "ts": "2026-07-12T15:00:00+00:00",
+        "risk": "HIGH RISK",
+        "p_bad": 0.85,
+        "viz_label": "Moderate",
+        "current_risk": "High",
+        "model_used": "rules_fallback",
+        "degraded_reason": "ml_predict_failed: ValueError"
+      },
+      "first_3_hours": [
+        {
+          "ts": "2026-07-12T15:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Moderate",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        },
+        {
+          "ts": "2026-07-12T16:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Moderate",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        },
+        {
+          "ts": "2026-07-12T17:00:00+00:00",
+          "risk": "HIGH RISK",
+          "p_bad": 0.85,
+          "viz_label": "Moderate",
+          "current_risk": "High",
+          "model_used": "rules_fallback",
+          "degraded_reason": "ml_predict_failed: ValueError"
+        }
+      ],
+      "degraded_top_level": []
+    }
+  }
+}

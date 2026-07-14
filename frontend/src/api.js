@@ -131,4 +131,12 @@ export const api = {
   // Experiments
   getExperimentResults: () => request('/api/v1/experiments/results'),
   runExperiments: () => request('/api/v1/experiments/run', { method: 'POST' }),
+
+  // Active learning (Phase 8) — past dates where operator confirmation
+  // would teach the model the most.
+  getActiveLearningSuggestions: (siteKey, { days = 7, topN = 3 } = {}) =>
+    request(
+      `/api/v1/active-learning/suggestions?site=${siteKey}&days=${days}&top_n=${topN}`,
+    ),
+  getActiveLearningSummary: () => request('/api/v1/active-learning/summary'),
 };
