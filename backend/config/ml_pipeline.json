@@ -1,0 +1,68 @@
+{
+  "random_seed": 42,
+  "paths": {
+    "database": "data/seasid.db",
+    "raw_dir": "data/ml/raw",
+    "processed_dir": "data/ml/processed",
+    "artifact_dir": "data/ml/artifacts",
+    "report_dir": "data/ml/reports"
+  },
+  "collection": {
+    "open_meteo_archive_url": "https://archive-api.open-meteo.com/v1/archive",
+    "start_date": "2024-01-01",
+    "end_date": null,
+    "chunk_days": 31,
+    "request_timeout_seconds": 30,
+    "max_retries": 4,
+    "rate_limit_seconds": 1.0,
+    "hourly_fields": [
+      "temperature_2m",
+      "relative_humidity_2m",
+      "precipitation",
+      "wind_speed_10m",
+      "wind_gusts_10m",
+      "surface_pressure"
+    ]
+  },
+  "dataset": {
+    "forecast_horizon_hours": 24,
+    "sequence_length_hours": 24,
+    "minimum_sequence_coverage": 0.9,
+    "trusted_source_prefixes": ["operator_", "manual", "diveviz", "viz_apps", "pagasa"],
+    "excluded_source_prefixes": ["synthetic", "archive_synthetic", "seed"],
+    "minimum_total_labels_for_promotion": 500,
+    "minimum_labels_per_class_for_promotion": 100,
+    "train_fraction": 0.7,
+    "validation_fraction": 0.15,
+    "purge_hours": 48
+  },
+  "xgboost": {
+    "search_iterations": 30,
+    "time_series_splits": 4,
+    "decision_metric": "average_precision",
+    "parameter_space": {
+      "n_estimators": [100, 200, 400, 700],
+      "learning_rate": [0.01, 0.03, 0.05, 0.1],
+      "max_depth": [2, 3, 4, 5, 6],
+      "min_child_weight": [1, 2, 4, 8],
+      "subsample": [0.6, 0.75, 0.9, 1.0],
+      "colsample_bytree": [0.6, 0.75, 0.9, 1.0],
+      "gamma": [0.0, 0.1, 0.3, 0.7],
+      "reg_alpha": [0.0, 0.01, 0.1, 1.0],
+      "reg_lambda": [0.5, 1.0, 2.0, 5.0, 10.0]
+    }
+  },
+  "lstm": {
+    "max_trials": 12,
+    "sequence_lengths": [12, 24, 48],
+    "hidden_sizes": [16, 32, 64],
+    "num_layers": [1, 2],
+    "dropouts": [0.1, 0.3],
+    "batch_sizes": [16, 32],
+    "learning_rates": [0.0003, 0.001],
+    "optimizers": ["adam", "adamw"],
+    "recurrent_dropout": 0.0,
+    "max_epochs": 100,
+    "patience": 12
+  }
+}

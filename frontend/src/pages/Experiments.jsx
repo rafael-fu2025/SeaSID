@@ -11,6 +11,41 @@ const METRICS = ['accuracy', 'precision', 'recall', 'f1', 'auc_roc'];
 
 const fmt = (v) => (v == null ? '—' : Number(v).toFixed(3));
 
+const MODEL_LABELS = {
+  rule: 'Rule baseline',
+  rule_based: 'Rule baseline',
+  xgb: 'XGBoost',
+  xgboost: 'XGBoost',
+  lstm: 'LSTM',
+  gru: 'GRU',
+};
+
+export function normalizeExperimentResults(payload) {
+  const results = payload?.results || payload || {};
+  let rows = [];
+
+  if (results.model_comparison && typeof results.model_comparison === 'object') {
+    rows = Object.entries(results.model_comparison).map(([name, metrics]) => ({
+      name,
+      ...(metrics || {}),
+    }));
+  } else if (Array.isArray(results.models)) {
+    rows = results.models.map((model) => ({
+      name: model.name,
+      ...(model.metrics || {}),
+    }));
+  } else if (results.by_model && typeof results.by_model === 'object') {
+    rows = Object.entries(results.by_model).map(([name, metrics]) => ({
+      name,
+      ...(metrics || {}),
+    }));
+  } else if (Array.isArray(results)) {
+    rows = results;
+  }
+
+  return { results, rows };
+}
+
 /**
  * Experiments — runs the model-compare suite + ablation suite and
  * surfaces metric tables per model.
@@ -140,35 +175,30 @@ function EmptyResults({ onRun, running }) {
 }
 
 function ResultsCard({ results }) {
-  // `results` may be:
-  //   { by_model: { lstm: {metric: value}, xgboost: {...}, gru, rule_based }, ... }
-  //   or
-  //   { models: [...] }
-  // We gracefully handle both.
-  let rows = [];
-  if (Array.isArray(results.models)) {
-    rows = results.models.map((m) => ({ name: m.name, ...m.metrics }));
-  } else if (results.by_model) {
-    rows = Object.entries(results.by_model).map(([name, metrics]) => ({
-      name,
-      ...(metrics || {}),
-    }));
-  } else if (Array.isArray(results)) {
-    rows = results;
-  }
+  const normalized = normalizeExperimentResults(results);
+  const data = normalized.results;
+  const rows = normalized.rows;
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
-          <BarChart3 className="size-4 text-reef" />
-          <CardTitle className="text-base">Model comparison</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="size-4 text-reef" />
+            <CardTitle className="text-base">Model comparison</CardTitle>
+          </div>
+          {data.best_model && (
+            <Badge className="gap-1.5">
+              Best: {MODEL_LABELS[data.best_model] || data.best_model}
+            </Badge>
+          )}
         </div>
         <CardDescription>
-          Each row is a model; each column a metric from LeaveOneOut cross-validation.
+          Holdout performance from the time-aware experiment split
+          {data.dataset?.test_size ? ` · ${data.dataset.test_size} test samples` : ''}.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="overflow-x-auto">
         <Table data-testid="experiments-table">
           <TableHeader>
             <TableRow>
@@ -191,8 +221,11 @@ function ResultsCard({ results }) {
               rows.map((r) => (
                 <TableRow key={r.name}>
                   <TableCell>
-                    <Badge variant="secondary" className="font-mono text-[10px]">
-                      {r.name}
+                    <Badge
+                      variant={r.name === data.best_model ? 'default' : 'secondary'}
+                      className="whitespace-nowrap text-[10px]"
+                    >
+                      {MODEL_LABELS[r.name] || r.name}
                     </Badge>
                   </TableCell>
                   {METRICS.map((m) => (

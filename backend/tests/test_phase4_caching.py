@@ -109,7 +109,7 @@ def test_build_sequences_for_window_minimises_db_sessions(monkeypatch):
     real_fetch_weather = features._fetch_weather_window
     real_fetch_tide = features._fetch_tide_window
     real_fetch_marine = features._fetch_marine_window
-    real_fetch_air = features._fetch_air_snapshot
+    real_fetch_air = features._fetch_air_window
 
     def counting_weather(*args, **kwargs):
         call_count["n"] += 1
@@ -130,7 +130,7 @@ def test_build_sequences_for_window_minimises_db_sessions(monkeypatch):
     monkeypatch.setattr(features, "_fetch_weather_window", counting_weather)
     monkeypatch.setattr(features, "_fetch_tide_window", counting_tide)
     monkeypatch.setattr(features, "_fetch_marine_window", counting_marine)
-    monkeypatch.setattr(features, "_fetch_air_snapshot", counting_air)
+    monkeypatch.setattr(features, "_fetch_air_window", counting_air)
 
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     target_tses = [now + timedelta(hours=h) for h in range(6)]

@@ -107,17 +107,20 @@ def build_features_for_window(
     start_tide = min(norm) - pd.Timedelta(hours=24)
     tide_df = _fetch_tide_window(site_key, end, hours=int((end - start_tide).total_seconds() // 3600))
     marine_df = _fetch_marine_window(site_key, end, hours=int((end - start_tide).total_seconds() // 3600))
-    # Air quality is a single snapshot — fetch once and reuse.
-    air_snapshot = _fetch_air_snapshot(site_key, end)
+    # Fetch the union once, then select the latest non-future snapshot per row.
+    air_df = _fetch_air_window(
+        site_key, end, hours=int((end - start).total_seconds() // 3600),
+    )
 
     rows = []
     for ts in norm:
         try:
-            f = _compute_features(
+            row = build_features_from_arrays(
                 weather_df, tide_df, site_key, ts,
-                marine_24h=marine_df,
-                air_snapshot=air_snapshot,
+                marine_df=marine_df,
+                air_snapshot=_air_snapshot_from_frame(air_df, ts),
             )
+            f = row.values[0]
         except Exception:
             f = [0.0] * len(FEATURE_COLUMNS)
         rows.append(f)
@@ -188,7 +191,7 @@ def build_sequences_for_window(
     weather_df = _fetch_weather_window(site_key, latest, hours=span_hours)
     tide_df = _fetch_tide_window(site_key, latest, hours=span_hours)
     marine_df = _fetch_marine_window(site_key, latest, hours=span_hours)
-    air_snapshot = _fetch_air_snapshot(site_key, latest)
+    air_df = _fetch_air_window(site_key, latest, hours=span_hours)
 
     # Filter once per (target, lookback-hour) pair using the in-memory DataFrames.
     # This is the inner loop that used to open a DB session per call.
@@ -200,7 +203,8 @@ def build_sequences_for_window(
             try:
                 row = build_features_from_arrays(
                     weather_df, tide_df, site_key, lookback_ts,
-                    marine_df=marine_df, air_snapshot=air_snapshot,
+                    marine_df=marine_df,
+                    air_snapshot=_air_snapshot_from_frame(air_df, lookback_ts),
                 )
                 out[i, window_hours - j] = row.values[0]
             except Exception:
@@ -422,6 +426,43 @@ def _fetch_air_snapshot(site_key: str, target_ts: datetime) -> dict | None:
         }
     finally:
         session.close()
+
+
+def _fetch_air_window(site_key: str, target_ts: datetime, hours: int) -> pd.DataFrame:
+    """Fetch batch air-quality rows so each example can use its own cutoff."""
+    start = target_ts - timedelta(hours=hours)
+    session = db.SessionLocal()
+    try:
+        rows = (
+            session.query(db.AirQualityObs)
+            .filter(db.AirQualityObs.site_key == site_key)
+            .filter(db.AirQualityObs.ts >= start)
+            .filter(db.AirQualityObs.ts <= target_ts)
+            .order_by(db.AirQualityObs.ts)
+            .all()
+        )
+        return pd.DataFrame([
+            {
+                "ts": _to_naive_utc(row.ts),
+                "aqi": row.aqi,
+                "pm25": row.pm25,
+                "pm10": row.pm10,
+                "o3": row.o3,
+                "no2": row.no2,
+                "station_name": row.station_name,
+            }
+            for row in rows
+        ])
+    finally:
+        session.close()
+
+
+def _air_snapshot_from_frame(frame: pd.DataFrame, target_ts: datetime) -> dict | None:
+    """Select only the latest air observation available by ``target_ts``."""
+    if frame.empty or "ts" not in frame.columns:
+        return None
+    eligible = frame[frame["ts"] <= _to_naive_utc(target_ts)]
+    return None if eligible.empty else eligible.iloc[-1].to_dict()
 
 
 def _compute_features(

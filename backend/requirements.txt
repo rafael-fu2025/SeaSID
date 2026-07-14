@@ -22,6 +22,10 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
 
+# The leakage-safe retraining workflow uses the pinned pandas, scikit-learn,
+# XGBoost, PyTorch, joblib, requests, matplotlib, and seaborn packages above;
+# no notebook-only dependency is required.
+
 # Optional external data providers (Storm Glass marine, AQICN air quality)
 # are implemented in app/lib/providers/ using the standard `requests`
 # library above. No additional dependencies are required. The libraries

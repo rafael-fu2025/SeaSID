@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -116,6 +117,8 @@ class LSTMTrainConfig:
     patience: int = 10
     weight_decay: float = 1e-4
     arch: Literal["lstm", "gru"] = "lstm"
+    optimizer: Literal["adam", "adamw", "rmsprop"] = "adam"
+    random_seed: int = 42
     # Phase 2: pos_weight for BCEWithLogitsLoss. Default 1.0 disables the
     # class balancing; the trainer computes the optimal value from the label
     # ratio when left at None. Set explicitly to a float to override.
@@ -162,18 +165,34 @@ def train_lstm(
     if config is None:
         config = LSTMTrainConfig()
 
+    np.random.seed(config.random_seed)
+    torch.manual_seed(config.random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config.random_seed)
+
     n_samples = len(X_sequences)
     if n_samples == 0:
         raise ValueError("Cannot train on empty dataset")
 
     n_features = X_sequences.shape[2] if X_sequences.ndim == 3 else len(FEATURE_COLUMNS)
 
-    # ── Normalize features ─────────────────────────────────────────────
-    scaler = StandardScaler()
-    original_shape = X_sequences.shape
-    X_flat = X_sequences.reshape(-1, n_features)
-    X_scaled = scaler.fit_transform(X_flat).reshape(original_shape)
+    def random_split_indices() -> tuple[np.ndarray, np.ndarray]:
+        if n_samples < 3:
+            return np.arange(n_samples), np.array([], dtype=int)
+        indices = np.arange(n_samples)
+        counts = np.unique(y, return_counts=True)[1]
+        stratify = y if len(counts) > 1 and counts.min() >= 2 else None
+        try:
+            return train_test_split(
+                indices, test_size=0.15, random_state=config.random_seed,
+                shuffle=True, stratify=stratify,
+            )
+        except ValueError:
+            shuffled = np.random.RandomState(config.random_seed).permutation(indices)
+            split_point = max(1, int(n_samples * 0.85))
+            return shuffled[:split_point], shuffled[split_point:]
 
+    # ── Normalize features ─────────────────────────────────────────────
     # ── Train/val split ────────────────────────────────────────────────
     # Phase 2: time-aware split when label_dates is supplied. Without
     # dates we fall back to a deterministic random shuffle (legacy tests).
@@ -196,15 +215,18 @@ def train_lstm(
             train_idx = np.array(sorted_indices[:split_idx])
             val_idx = np.array(sorted_indices[split_idx:])
         else:
-            split_idx = max(1, int(n_samples * 0.85))
-            indices = np.random.RandomState(42).permutation(n_samples)
-            train_idx = indices[:split_idx]
-            val_idx = indices[split_idx:]
+            train_idx, val_idx = random_split_indices()
     else:
-        split_idx = max(1, int(n_samples * 0.85))
-        indices = np.random.RandomState(42).permutation(n_samples)
-        train_idx = indices[:split_idx]
-        val_idx = indices[split_idx:]
+        train_idx, val_idx = random_split_indices()
+
+    # Preprocessing is fitted on training timesteps only. The previous
+    # fit_transform over every sequence leaked validation statistics.
+    scaler = StandardScaler()
+    original_shape = X_sequences.shape
+    scaler.fit(X_sequences[train_idx].reshape(-1, n_features))
+    X_scaled = scaler.transform(
+        X_sequences.reshape(-1, n_features)
+    ).reshape(original_shape)
 
     X_train = torch.FloatTensor(X_scaled[train_idx]).to(DEVICE)
     y_train = torch.FloatTensor(y[train_idx]).to(DEVICE)
@@ -239,8 +261,9 @@ def train_lstm(
     # labels unless the config overrides it — this stops the model from
     # ignoring the minority class (40+ positives vs 60+ negatives in the
     # current dataset).
-    n_pos = float(y.sum())
-    n_neg = float(len(y) - n_pos)
+    # Class weighting is learned from the training labels only.
+    n_pos = float(y[train_idx].sum())
+    n_neg = float(len(train_idx) - n_pos)
     if config.pos_weight is None:
         if n_pos == 0 or n_neg == 0:
             pw_tensor = torch.tensor([1.0], device=DEVICE)
@@ -249,11 +272,12 @@ def train_lstm(
     else:
         pw_tensor = torch.tensor([float(config.pos_weight)], device=DEVICE)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=config.lr,
-        weight_decay=config.weight_decay,
-    )
+    optimizer_class = {
+        "adam": torch.optim.Adam,
+        "adamw": torch.optim.AdamW,
+        "rmsprop": torch.optim.RMSprop,
+    }[config.optimizer]
+    optimizer = optimizer_class(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5,
     )
@@ -314,12 +338,19 @@ def train_lstm(
 
     # ── Compute metrics ────────────────────────────────────────────────
     model.eval()
-    metrics = _compute_metrics(model, X_scaled, y, config)
+    evaluation_idx = val_idx if len(val_idx) > 0 else train_idx
+    metrics = _compute_metrics(
+        model, X_scaled[evaluation_idx], y[evaluation_idx], config,
+    )
+    metrics["evaluation_split"] = "validation" if len(val_idx) > 0 else "train"
+    metrics["n_train"] = int(len(train_idx))
+    metrics["n_validation"] = int(len(val_idx))
     metrics["epochs_trained"] = len(train_losses)
     metrics["best_val_loss"] = float(best_val_loss) if best_val_loss != float("inf") else None
     metrics["final_train_loss"] = train_losses[-1] if train_losses else None
     metrics["n_samples"] = n_samples
     metrics["arch"] = config.arch
+    metrics["optimizer"] = config.optimizer
     metrics["pos_weight"] = float(pw_tensor.item())
 
     model = model.cpu()
@@ -391,6 +422,8 @@ def save_lstm(result: LSTMTrainingResult, model_path: Path, metrics_path: Path) 
         "num_layers": result.config.num_layers,
         "dropout": result.config.dropout,
         "arch": result.config.arch,
+        "optimizer": result.config.optimizer,
+        "random_seed": result.config.random_seed,
     }
     # Persist pos_weight so a reload+continue training works later.
     if result.config.pos_weight is not None:

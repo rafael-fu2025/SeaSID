@@ -4,6 +4,9 @@
 
 SeaSID combines a PyTorch **LSTM** (primary forecaster), **XGBoost** (baseline + ablation), and an LLM-powered **agent** to predict diving safety conditions from real-time weather, marine, and air-quality data. The whole thing is built around a **pluggable provider registry** — Open-Meteo is the default; Storm Glass and AQICN swap in via env vars when you want richer marine or air-quality data.
 
+> Model quality, dataset requirements, safe collection, and exact retraining
+> commands are documented in [backend/ML_RETRAINING.md](backend/ML_RETRAINING.md).
+
 ---
 
 ## Architecture
