@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from app.lib.sites import get_site, get_all_sites, site_keys
 from app.lib.features import build_features, FEATURE_COLUMNS
@@ -22,6 +23,102 @@ logger = logging.getLogger(__name__)
 
 
 # ── Tool handlers ──────────────────────────────────────────────────────────
+
+
+def _require_site_key(args: dict, tool_name: str) -> tuple[str | None, str | None]:
+    """Validate and return ``(site_key, error_json)``.
+
+    Returns ``(site_key, None)`` on success, or ``(None, error_json)`` when
+    the argument is missing, the wrong type, or doesn't match a known
+    site. Every site-keyed handler funnels through this so the LLM gets
+    a single, unambiguous error message instead of seeing "Unknown site:
+    None" and concluding the site name is the problem.
+
+    The error is JSON (so the model can read it as a tool result), with
+    a clear ``error_code`` so deterministic tests can assert against it.
+    """
+    if not isinstance(args, dict):
+        return None, json.dumps({
+            "error": f"{tool_name} requires an object argument with `site_key`.",
+            "error_code": "missing_site_key",
+            "valid_sites": list(site_keys()),
+        })
+    raw = args.get("site_key")
+    if raw is None or raw == "":
+        return None, json.dumps({
+            "error": (
+                f"{tool_name} requires `site_key`. Pass one of: "
+                f"{', '.join(site_keys())}."
+            ),
+            "error_code": "missing_site_key",
+            "valid_sites": list(site_keys()),
+        })
+    site_key = str(raw).strip()
+    if not site_key:
+        return None, json.dumps({
+            "error": (
+                f"{tool_name} requires `site_key`. Pass one of: "
+                f"{', '.join(site_keys())}."
+            ),
+            "error_code": "missing_site_key",
+            "valid_sites": list(site_keys()),
+        })
+    if get_site(site_key) is None:
+        return None, json.dumps({
+            "error": (
+                f"Unknown site_key '{site_key}'. Valid sites: "
+                f"{', '.join(site_keys())}."
+            ),
+            "error_code": "unknown_site",
+            "valid_sites": list(site_keys()),
+        })
+    return site_key, None
+
+
+def _site_key_only(handler, tool_name, extra_args_fn=None):
+    """Wrap a ``(site_key: str) -> str`` handler with site-key validation.
+
+    The agent loop calls every handler as ``handler(args_dict)``; this
+    wrapper unpacks ``site_key`` from the dict (or returns a clear
+    error) before delegating to the legacy single-arg handler. Tests
+    that still call ``get_forecast_handler("dauin_muck")`` directly
+    continue to work because the wrapper also accepts a string.
+
+    ``extra_args_fn`` is an optional callback that takes the raw
+    ``args`` dict and returns the trailing positional arguments after
+    ``site_key``. Used for ``get_history`` which also takes a ``days``
+    integer.
+    """
+
+    def _wrapped(args):
+        # Direct-string call (legacy / test path): pass through.
+        if isinstance(args, str):
+            return handler(args)
+        site_key, err = _require_site_key(args or {}, tool_name)
+        if err is not None:
+            return err
+        if extra_args_fn is not None:
+            return handler(site_key, *extra_args_fn(args or {}))
+        return handler(site_key)
+
+    return _wrapped
+
+
+def _history_days_arg(args: dict) -> tuple[int]:
+    """Extract the optional ``days`` arg for ``get_history``.
+
+    Clamps to the 1–30 range the underlying handler accepts, and falls
+    back to 7 when the value is missing or invalid. Wrapping the
+    coercion here keeps the LLM-facing error surface small: an
+    out-of-range days value just defaults to 7 instead of crashing.
+    """
+    raw = (args or {}).get("days")
+    try:
+        days = int(raw) if raw is not None else 7
+    except (TypeError, ValueError):
+        days = 7
+    return (max(1, min(days, 30)),)
+
 
 def get_forecast_handler(site_key: str) -> str:
     """Get the current forecast and risk assessment for a dive site."""
@@ -152,7 +249,7 @@ def get_air_quality_handler(site_key: str) -> str:
                 "available": False,
                 "message": (
                     "No air-quality data has been ingested yet. "
-                    "Set AQICN_API_KEY and run ingest, or enable "
+                    "Add an AQICN key in Settings and run ingest, or enable "
                     "SEASID_PROVIDER_AIR=aqicn."
                 ),
             })
@@ -373,7 +470,7 @@ def get_air_quality_handler(site_key: str) -> str:
                 "site": site["name"],
                 "available": False,
                 "reason": "no_snapshot",
-                "hint": "No air-quality data yet. Configure AQICN_API_KEY and re-run ingest_site to enable.",
+                "hint": "No air-quality data yet. Add an AQICN key in Settings and re-run ingest_site.",
                 "source": None,
             })
         return json.dumps({
@@ -512,13 +609,120 @@ TOOL_DEFINITIONS = [
     },
 ]
 
-# Map function names to handlers
+# Map function names to handlers. Every site-keyed handler is wrapped
+# in ``_site_key_only`` so the LLM gets a structured, unambiguous
+# error message when it forgets to pass ``site_key`` (instead of the
+# old "Unknown site: None" response that sent the model into a loop
+# of empty retries). ``list_sites`` and ``get_model_info`` take no
+# arguments and need no validation.
 TOOL_HANDLERS = {
-    "get_forecast": lambda args: get_forecast_handler(args["site_key"]),
-    "get_weather": lambda args: get_weather_handler(args["site_key"]),
+    "get_forecast": _site_key_only(get_forecast_handler, "get_forecast"),
+    "get_weather": _site_key_only(get_weather_handler, "get_weather"),
     "list_sites": lambda args: list_sites_handler(),
     "get_model_info": lambda args: get_model_info_handler(),
-    "get_history": lambda args: get_history_handler(args["site_key"], args.get("days", 7)),
-    "check_alerts": lambda args: check_alerts_handler(args["site_key"]),
-    "get_air_quality": lambda args: get_air_quality_handler(args["site_key"]),
+    "get_history": _site_key_only(
+        get_history_handler, "get_history", extra_args_fn=_history_days_arg
+    ),
+    "check_alerts": _site_key_only(check_alerts_handler, "check_alerts"),
+    "get_air_quality": _site_key_only(get_air_quality_handler, "get_air_quality"),
 }
+
+
+# ── Live MCP tool merging ─────────────────────────────────────────────────
+#
+# The MiniMax web-search MCP exposes `web_search` and `web_browse` (and any
+# future tools the upstream MCP adds). We inject them into the OpenAI
+# function-calling list lazily, once per agent call, by reading whatever
+# tools the subprocess advertised during `tools/list`. The agent loop calls
+# :func:`get_active_tool_definitions` to assemble the list it sends to the
+# model. Handlers for the MCP-backed tools dispatch to
+# :func:`app.lib.agent_mcp.call_mcp_tool`, which talks JSON-RPC to the
+# subprocess. The function signatures match the upstream tool list so the
+# schemas the model sees stay valid across MCP upgrades.
+#
+# We wrap the merge in a thread lock so a burst of agent calls doesn't
+# each boot the subprocess.
+
+from threading import Lock as _ThreadLock
+
+_mcp_merge_lock = _ThreadLock()
+_mcp_tools_cache: list[dict] | None = None
+_mcp_tool_names: set[str] = set()
+
+
+def _static_tool_definitions() -> list[dict]:
+    """Return the built-in tool definitions (no MCP)."""
+    return list(TOOL_DEFINITIONS)
+
+
+async def get_active_tool_definitions() -> tuple[list[dict], dict[str, Any]]:
+    """Return ``(tool_definitions, handlers)`` including the live MCP tools.
+
+    ``handlers`` maps tool name -> async callable. Built-in handlers stay
+    synchronous; the merge wraps them in coroutine shims so the agent
+    loop can ``await`` every handler uniformly.
+    """
+    from app.lib import agent_mcp
+
+    # Snapshot the static set up front — never mutate TOOL_DEFINITIONS.
+    definitions = _static_tool_definitions()
+    handlers: dict[str, Any] = {
+        "get_forecast": _to_async(_site_key_only(get_forecast_handler, "get_forecast")),
+        "get_weather": _to_async(_site_key_only(get_weather_handler, "get_weather")),
+        "list_sites": _to_async(list_sites_handler),
+        "get_model_info": _to_async(get_model_info_handler),
+        "get_history": _to_async(
+            _site_key_only(
+                get_history_handler, "get_history", extra_args_fn=_history_days_arg
+            )
+        ),
+        "check_alerts": _to_async(_site_key_only(check_alerts_handler, "check_alerts")),
+        "get_air_quality": _to_async(
+            _site_key_only(get_air_quality_handler, "get_air_quality")
+        ),
+    }
+
+    mcp_tools: list = []
+    try:
+        mcp_tools = await agent_mcp.get_mcp_tools()
+    except Exception as exc:
+        logger.debug("MCP tool discovery skipped: %s", exc)
+        mcp_tools = []
+
+    for tool in mcp_tools:
+        if not tool.name or tool.name in handlers:
+            # Don't let an MCP tool shadow a built-in; first writer wins.
+            continue
+        definitions.append({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or f"MCP tool: {tool.name}",
+                "parameters": tool.input_schema or {"type": "object", "properties": {}},
+            },
+        })
+        handlers[tool.name] = _make_mcp_handler(tool.name)
+
+    return definitions, handlers
+
+
+def _to_async(sync_handler):
+    """Wrap a sync tool handler as an async coroutine for uniform awaiting."""
+    import asyncio
+
+    async def _wrapper(args: dict) -> str:
+        return sync_handler(args)
+
+    return _wrapper
+
+
+def _make_mcp_handler(tool_name: str):
+    """Return an async handler that dispatches ``tool_name`` to the MCP."""
+
+    async def _handler(args: dict) -> str:
+        from app.lib import agent_mcp
+
+        return await agent_mcp.call_mcp_tool(tool_name, args or {})
+
+    return _handler
+

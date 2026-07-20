@@ -27,6 +27,7 @@ backend/data/seasid.db
 backend/data/seasid.db-journal
 backend/data/seasid.db-wal
 backend/data/seasid.db-shm
+backend/data/*.key
 backend/data/seasid_lstm.pt
 backend/data/seasid_lstm.pt.optimizer
 backend/data/seasid_xgb.pkl

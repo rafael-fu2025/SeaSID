@@ -6,6 +6,7 @@ Provides natural-language dive condition Q&A and briefing generation.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-from app.lib.agent_tools import TOOL_DEFINITIONS, TOOL_HANDLERS
+from app.lib.agent_tools import get_active_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,21 @@ Key rules:
 5. Consider the site type: muck dive sites (Dauin) are more sensitive to runoff than reefs (Apo).
 6. For dive briefings, include: conditions summary, key risks, recommendations, and a go/no-go assessment.
 7. When haze or smoke is mentioned, call get_air_quality to check PM2.5/AQI before recommending.
+8. When the user asks about anything that may have changed since the model's last training cut-off
+   (e.g. tropical storms, regional advisories, news, recent port conditions), call `web_search` first
+   and cite the source URLs in your answer. Only use web results to enrich a forecast — never replace
+   a tool-based check on a SeaSID-managed site.
+
+Tool-argument discipline:
+- Every site-keyed tool (`get_forecast`, `get_weather`, `get_history`, `check_alerts`,
+  `get_air_quality`) requires a `site_key` string. If you forget the argument the tool will
+  return a structured error that says exactly which argument is missing and which values are
+  valid. Do not interpret that error as "the site is unknown" — read the `error_code` and
+  `valid_sites` fields and re-issue the call with a `site_key` from the list. The two valid
+  values are `dauin_muck` and `apo_reef`.
+- When comparing two sites (e.g. "compare Dauin and Apo"), call the tool once per site in
+  parallel-style turns; never call a site-keyed tool with no arguments and never call `list_sites`
+  with arguments.
 
 Available sites:
 - dauin_muck: Dauin Muck Bays (muck diving, black sand)
@@ -44,11 +60,78 @@ Available sites:
 
 MAX_TOOL_ROUNDS = 5
 
+# Default timezone for the agent's "now" hint. Dauin/Apo live in
+# Asia/Manila (UTC+8, no DST). Override via AGENT_TIMEZONE if you run
+# SeaSID somewhere else. The value is read inside ``_now_reminder()``
+# so test runs (and runtime config reloads) can change it without
+# re-importing the module.
+
+
+def _now_reminder() -> str:
+    """Build a short, time-anchored system reminder for the model.
+
+    The LLM has no live clock — without this it falls back on its
+    training-data cut-off, which makes `web_search` queries about
+    "current" weather, advisories, or port conditions stale (it once
+    answered as if it were 2024). The reminder is injected at the very
+    top of every turn so the model sees today's date before anything
+    else and can frame search queries in the right year.
+    """
+    tz_name = os.getenv("AGENT_TIMEZONE", "Asia/Manila")
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        # zoneinfo missing or bad tz name — fall back to UTC.
+        now = datetime.now(timezone.utc)
+    weekday = now.strftime("%A")
+    # Include seconds so consecutive reminders in a long conversation
+    # differ even within the same minute — the model can't pin the
+    # exact time, but a moving timestamp reinforces that the reminder
+    # is fresh on every turn.
+    iso = now.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return (
+        f"Current local time: {iso} ({weekday}). "
+        "Always anchor 'today', 'this week', and 'current' questions to this "
+        "date; do not assume a year from training data. When the user asks "
+        "about anything time-sensitive (storms, advisories, news, port conditions), "
+        "use web_search with year-aware queries before answering."
+    )
+
+
+def _resolve_llm_runtime():
+    """Load the next rotating LLM key and shared base URL from the database."""
+    try:
+        from app.lib import provider_keys
+
+        key_record = provider_keys.pick_provider_key("llm")
+        config = provider_keys.get_provider_config("llm")
+        return provider_keys, key_record, config.get("base_url")
+    except Exception as exc:
+        logger.warning("Could not resolve database-backed LLM configuration: %s", exc)
+        return None, None, None
+
+
+async def _guard_stream(response, provider_keys, key_id: int):
+    """Convert transport failures during SSE iteration into an explicit event."""
+    try:
+        async for chunk in response:
+            yield chunk
+    except Exception as exc:
+        if provider_keys is not None:
+            provider_keys.mark_provider_error(key_id, str(exc))
+        yield {"_seasid_stream_error": str(exc)}
+    else:
+        if provider_keys is not None:
+            provider_keys.clear_provider_error(key_id)
+
 
 async def chat(
     user_message: str,
     conversation_id: str | None = None,
     site_key: str | None = None,
+    owner_id: str | None = None,
 ) -> dict:
     """
     Process a user message through the agent.
@@ -69,26 +152,32 @@ async def chat(
             "tool_calls": [],
         }
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    provider_keys, key_record, base_url = _resolve_llm_runtime()
+    if key_record is None:
         return {
-            "response": "API key not configured. Please set OPENAI_API_KEY in your .env file.",
+            "response": "API key not configured. Add an enabled LLM key in Settings → API keys.",
             "conversation_id": conversation_id or str(uuid.uuid4()),
             "tool_calls": [],
         }
 
     model = os.getenv("OPENAI_MODEL", "MiniMax-M1").strip()
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(api_key=key_record.value, base_url=base_url)
 
     if conversation_id is None:
         conversation_id = str(uuid.uuid4())
 
     # Build messages
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Compose the system prompt: server-injected "today is …" reminder first
+    # (so the model anchors time-sensitive questions to the present), then
+    # the static persona. The reminder is rebuilt on every turn so long
+    # conversations can't drift away from "now".
+    messages = [
+        {"role": "system", "content": _now_reminder()},
+        {"role": "system", "content": SYSTEM_PROMPT},
+    ]
 
     # Load conversation history
-    history = _load_history(conversation_id)
+    history = _load_history(conversation_id, owner_id=owner_id)
     messages.extend(history)
 
     # Add site context if provided
@@ -98,7 +187,16 @@ async def chat(
     messages.append({"role": "user", "content": user_message})
 
     # Save user message
-    _save_message(conversation_id, "user", user_message, site_key=site_key)
+    _save_message(
+        conversation_id, "user", user_message,
+        site_key=site_key, owner_id=owner_id,
+    )
+
+    # Pull the merged tool list (built-ins + MiniMax MCP web tools).
+    # Done once per turn so all rounds in the same conversation see the
+    # same set; if the MCP goes away mid-turn, the handlers fall back to
+    # a friendly "unavailable" message without aborting the loop.
+    tool_definitions, tool_handlers = await get_active_tool_definitions()
 
     tool_calls_log = []
 
@@ -108,25 +206,29 @@ async def chat(
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=TOOL_DEFINITIONS,
+                tools=tool_definitions,
                 tool_choice="auto",
                 temperature=0.3,
                 max_tokens=1024,
             )
         except Exception as exc:
             logger.error("OpenAI API error: %s", exc)
+            if provider_keys is not None:
+                provider_keys.mark_provider_error(key_record.id, str(exc))
             return {
                 "response": f"I'm having trouble connecting to the AI service: {exc}",
                 "conversation_id": conversation_id,
                 "tool_calls": tool_calls_log,
             }
 
+        if provider_keys is not None:
+            provider_keys.clear_provider_error(key_record.id)
         choice = response.choices[0]
 
         # If no tool calls, we have the final response
         if choice.finish_reason == "stop" or not choice.message.tool_calls:
             assistant_content = choice.message.content or ""
-            _save_message(conversation_id, "assistant", assistant_content)
+            _save_message(conversation_id, "assistant", assistant_content, owner_id=owner_id)
 
             return {
                 "response": assistant_content,
@@ -146,10 +248,12 @@ async def chat(
 
             logger.info("Agent calling tool: %s(%s)", func_name, func_args)
 
-            handler = TOOL_HANDLERS.get(func_name)
+            handler = tool_handlers.get(func_name)
             if handler:
                 try:
                     result = handler(func_args)
+                    if asyncio.iscoroutine(result):
+                        result = await result
                 except Exception as exc:
                     result = json.dumps({"error": str(exc)})
             else:
@@ -175,7 +279,7 @@ async def chat(
     }
 
 
-async def generate_briefing(site_key: str) -> dict:
+async def generate_briefing(site_key: str, owner_id: str | None = None) -> dict:
     """
     Generate a structured dive briefing for a site.
     Uses the agent with a specific briefing prompt.
@@ -190,7 +294,7 @@ async def generate_briefing(site_key: str) -> dict:
         f"Format it as a professional dive briefing."
     )
 
-    result = await chat(prompt, site_key=site_key)
+    result = await chat(prompt, site_key=site_key, owner_id=owner_id)
     result["site_key"] = site_key
     result["type"] = "briefing"
     return result
@@ -198,20 +302,23 @@ async def generate_briefing(site_key: str) -> dict:
 
 # ── History management ─────────────────────────────────────────────────────
 
-def _load_history(conversation_id: str, max_messages: int = 20) -> list[dict]:
+def _load_history(
+    conversation_id: str,
+    max_messages: int = 20,
+    owner_id: str | None = None,
+) -> list[dict]:
     """Load recent conversation history from the database."""
     try:
         from app.lib import db
 
         session = db.SessionLocal()
         try:
-            rows = (
-                session.query(db.AgentConversation)
-                .filter(db.AgentConversation.conversation_id == conversation_id)
-                .order_by(db.AgentConversation.ts.desc())
-                .limit(max_messages)
-                .all()
+            query = session.query(db.AgentConversation).filter(
+                db.AgentConversation.conversation_id == conversation_id,
             )
+            if owner_id is not None:
+                query = query.filter(db.AgentConversation.owner_id == owner_id)
+            rows = query.order_by(db.AgentConversation.ts.desc()).limit(max_messages).all()
 
             messages = []
             for row in reversed(rows):
@@ -230,6 +337,7 @@ def _save_message(
     content: str,
     site_key: str | None = None,
     tool_calls_json: str | None = None,
+    owner_id: str | None = None,
 ) -> None:
     """Save a message to the conversation history."""
     try:
@@ -239,6 +347,7 @@ def _save_message(
         try:
             msg = db.AgentConversation(
                 conversation_id=conversation_id,
+                owner_id=owner_id,
                 site_key=site_key,
                 role=role,
                 content=content,
@@ -258,6 +367,7 @@ async def chat_stream(
     user_message: str,
     conversation_id: str | None = None,
     site_key: str | None = None,
+    owner_id: str | None = None,
 ):
     """
     Streaming variant of `chat()` — yields dict events that the FastAPI
@@ -280,14 +390,16 @@ async def chat_stream(
         yield {"type": "error", "message": "openai library not installed"}
         return
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        yield {"type": "error", "message": "OPENAI_API_KEY not configured"}
+    provider_keys, key_record, base_url = _resolve_llm_runtime()
+    if key_record is None:
+        yield {
+            "type": "error",
+            "message": "LLM API key not configured. Add an enabled key in Settings → API keys.",
+        }
         return
 
     model = os.getenv("OPENAI_MODEL", "MiniMax-M1").strip()
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(api_key=key_record.value, base_url=base_url)
 
     if conversation_id is None:
         conversation_id = str(uuid.uuid4())
@@ -295,22 +407,37 @@ async def chat_stream(
     yield {"type": "status", "conversation_id": conversation_id}
 
     # Build messages
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    history = _load_history(conversation_id)
+    # Server-injected "today is …" reminder first (so time-sensitive
+    # questions anchor to the present), then the static persona. The
+    # reminder rebuilds on every turn so long conversations can't drift
+    # away from "now".
+    messages = [
+        {"role": "system", "content": _now_reminder()},
+        {"role": "system", "content": SYSTEM_PROMPT},
+    ]
+    history = _load_history(conversation_id, owner_id=owner_id)
     messages.extend(history)
     if site_key:
         user_message = f"[Context: site='{site_key}'] {user_message}"
     messages.append({"role": "user", "content": user_message})
-    _save_message(conversation_id, "user", user_message, site_key=site_key)
+    _save_message(
+        conversation_id, "user", user_message,
+        site_key=site_key, owner_id=owner_id,
+    )
 
     tool_calls_log: list[dict] = []
+
+    # Pull the merged tool list (built-ins + MiniMax MCP web tools) once
+    # per turn. The MCP may add/remove tools across restarts; if it can't
+    # boot, the model just doesn't see the web_search / web_browse entries.
+    tool_definitions, tool_handlers = await get_active_tool_definitions()
 
     for _round in range(MAX_TOOL_ROUNDS):
         try:
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=TOOL_DEFINITIONS,
+                tools=tool_definitions,
                 tool_choice="auto",
                 temperature=0.3,
                 max_tokens=1024,
@@ -318,6 +445,8 @@ async def chat_stream(
             )
         except Exception as exc:
             logger.error("OpenAI streaming error: %s", exc)
+            if provider_keys is not None:
+                provider_keys.mark_provider_error(key_record.id, str(exc))
             yield {"type": "error", "message": str(exc)}
             return
 
@@ -329,7 +458,13 @@ async def chat_stream(
         full_content: str = ""
         usage_payload: dict | None = None
 
-        async for chunk in response:
+        async for chunk in _guard_stream(response, provider_keys, key_record.id):
+            if isinstance(chunk, dict) and chunk.get("_seasid_stream_error"):
+                yield {
+                    "type": "error",
+                    "message": f"LLM connection interrupted: {chunk['_seasid_stream_error']}",
+                }
+                return
             # `chunk.choices` can be empty on usage-only chunks
             if not chunk.choices:
                 if getattr(chunk, "usage", None):
@@ -381,7 +516,7 @@ async def chat_stream(
         if not has_tool_calls:
             # Final answer this round.
             if full_content:
-                _save_message(conversation_id, "assistant", full_content)
+                _save_message(conversation_id, "assistant", full_content, owner_id=owner_id)
             if usage_payload:
                 yield {"type": "usage", **usage_payload}
             yield {
@@ -431,10 +566,12 @@ async def chat_stream(
             }
 
             t0 = time.monotonic()
-            handler = TOOL_HANDLERS.get(tc["name"])
+            handler = tool_handlers.get(tc["name"])
             if handler:
                 try:
                     result = handler(func_args)
+                    if asyncio.iscoroutine(result):
+                        result = await result
                 except Exception as exc:
                     result = json.dumps({"error": str(exc)})
             else:

@@ -138,9 +138,28 @@ class LabelsResponse(BaseModel):
 # ── Agent ──────────────────────────────────────────────────────────────────
 
 class AgentChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
     site_key: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class UserInfo(BaseModel):
+    subject: str
+    username: str
+    role: str
+    site_keys: list[str] = []
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserInfo
 
 
 class ToolCallInfo(BaseModel):
@@ -242,8 +261,81 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     model_loaded: str
+    selected_tier: str
+    selection_reason: str
     db_tables: int
     # v2.1 — names of the providers currently active in the registry,
     # keyed by role (weather / marine / air). The Settings page renders
     # this so operators can see which third-party data sources are live.
     providers: dict[str, str] = {}
+
+
+# ── Admin: user management ───────────────────────────────────────────────
+
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=256)
+    role: str = Field(default="viewer")
+    site_keys: list[str] = Field(default_factory=lambda: ["*"])
+    subject: str | None = Field(default=None, max_length=100)
+
+
+class UserUpdate(BaseModel):
+    role: str | None = Field(default=None)
+    site_keys: list[str] | None = Field(default=None)
+    enabled: bool | None = Field(default=None)
+    password: str | None = Field(default=None, min_length=8, max_length=256)
+    subject: str | None = Field(default=None, max_length=100)
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    subject: str
+    role: str
+    site_keys: list[str]
+    enabled: bool
+    last_login_at: str | None = None
+
+
+# ── Admin: provider API key management ─────────────────────────────────
+class ApiKeyCreate(BaseModel):
+    provider: str = Field(min_length=1, max_length=50)
+    label: str | None = Field(default=None, max_length=120)
+    value: str = Field(min_length=1, max_length=4096)
+    enabled: bool = Field(default=True)
+
+
+class ApiKeyUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    value: str | None = Field(default=None, min_length=1, max_length=4096)
+    enabled: bool | None = Field(default=None)
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    provider: str
+    label: str | None
+    value_preview: str
+    enabled: bool
+    created_at: str | None
+    updated_at: str | None
+    last_used_at: str | None
+    last_error_at: str | None
+    last_error: str | None
+    error_count: int
+    cooldown_until: str | None
+    total_uses: int
+    created_by_subject: str | None
+
+
+class ProviderConfigUpdate(BaseModel):
+    base_url: str | None = Field(default=None, max_length=2048)
+
+
+# ── Self-service password change ───────────────────────────────────────
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)

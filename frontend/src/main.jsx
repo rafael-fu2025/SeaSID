@@ -12,7 +12,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
  * Provider stack (outer → inner):
  *   ThemeProvider       — sets `data-theme` on <html> (dark / light)
  *   TooltipProvider     — supplies Radix tooltip context once so nested
- *                          SidebarNav / StatusBar / Inspector labels can
+ *                          SidebarNav / StatusBar labels can
  *                          call `<Tooltip>` without re-wrapping.
  *
  * Note: `SidebarProvider` was removed in v3; the legacy sidebar is gone

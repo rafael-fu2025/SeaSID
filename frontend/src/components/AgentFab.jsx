@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SiteSelector } from '@/components/SiteSelector';
 import { cn } from '@/lib/utils';
 import { api, streamChat } from '@/api';
@@ -55,6 +56,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState(null);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const scrollRef = useRef(null);
 
   // External trigger from CommandPalette (and any in-page "Open agent"
@@ -221,18 +223,24 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
 
   const reset = () => {
     // Confirm before discarding a non-empty transcript (roadmap #10).
+    // Empty transcripts skip the dialog so accidental clicks don't
+    // interrupt the user with a stray confirmation.
     if (messages.length > 0) {
-      // eslint-disable-next-line no-alert
-      const ok = window.confirm(
-        'Discard the current conversation? This cannot be undone.',
-      );
-      if (!ok) return;
+      setResetDialogOpen(true);
+      return;
     }
     setMessages([]);
     setConversationId(null);
   };
 
+  const confirmReset = () => {
+    setMessages([]);
+    setConversationId(null);
+    setResetDialogOpen(false);
+  };
+
   return (
+    <>
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <button
@@ -377,6 +385,17 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         </div>
       </SheetContent>
     </Sheet>
+    <ConfirmDialog
+      open={resetDialogOpen}
+      onOpenChange={setResetDialogOpen}
+      title="Discard the current conversation?"
+      description="This clears every message in this agent thread. It cannot be undone."
+      confirmLabel="Discard"
+      cancelLabel="Keep conversation"
+      tone="danger"
+      onConfirm={confirmReset}
+    />
+    </>
   );
 }
 

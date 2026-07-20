@@ -134,9 +134,7 @@ describe('AgentFab', () => {
     expect(await screen.findByTestId('agent-site-selector')).toBeInTheDocument();
   });
 
-  it('reset confirms via window.confirm when transcript is non-empty (roadmap #10)', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-
+  it('reset confirms via the Sign out/Reset dialog when transcript is non-empty (roadmap #10)', async () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
     const input = screen.getByTestId('agent-input');
@@ -147,28 +145,25 @@ describe('AgentFab', () => {
     const reset = screen.getByTestId('agent-reset');
     fireEvent.click(reset);
 
-    // User declined → messages should still be present.
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    // The custom dialog opens; user clicks Keep conversation → messages stay.
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-cancel'));
     expect(screen.queryByText(/no conversation yet/i)).not.toBeInTheDocument();
 
-    // User accepts → messages should clear.
-    confirmSpy.mockReturnValue(true);
+    // Re-opening the dialog and clicking Discard clears the transcript.
     fireEvent.click(reset);
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
     expect(await screen.findByText(/no conversation yet/i)).toBeInTheDocument();
-    confirmSpy.mockRestore();
   });
 
   it('reset does not prompt when transcript is empty', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // Reset is disabled in the empty state, so we use a click on a
-    // re-enabled button instead — but at this point the button is
-    // disabled (no messages). So we just confirm that confirm() is
-    // never called when the user cannot click reset.
+    // The empty-state reset button stays disabled so no dialog is shown.
     const reset = screen.getByTestId('agent-reset');
     expect(reset).toBeDisabled();
-    confirmSpy.mockRestore();
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument();
   });
 
   it('streams tool calls and thinking into the assistant message', async () => {

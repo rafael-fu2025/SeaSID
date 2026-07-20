@@ -12,6 +12,7 @@ scipy==1.18.0
 xgboost==3.3.0
 torch==2.13.0
 openai==2.44.0
+PyJWT==2.13.0
 tiktoken==0.13.0
 joblib==1.5.3
 requests==2.34.2
@@ -26,4 +27,4 @@ httpx==0.28.1
 # are implemented in app/lib/providers/ using the standard `requests`
 # library above. No additional dependencies are required. The libraries
 # are toggled per-role via SEASID_PROVIDER_{WEATHER,MARINE,AIR} env
-# variables; the corresponding *_API_KEY is read directly from .env.
+# variables; credentials can come from encrypted admin-managed keys or .env.

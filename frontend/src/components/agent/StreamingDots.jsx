@@ -1,12 +1,12 @@
+import waveGif from '@/assets/wave.gif';
+
 /**
- * StreamingDots — 3-dot typing indicator with staggered pulse.
+ * StreamingDots — "Agent thinking" loading indicator.
  *
- * Ports the visual feel of minimax_cb's `.thinking-dot` (a 6×6
- * pulsing circle) but expands to the standard three-dot pattern that
- * users recognise from every modern chat app (Slack, iMessage, etc.).
- *
- * The pulse is staggered so the dots feel like a wave rather than
- * three independent dots flashing in unison.
+ * Originally a 3-dot pulsing row, now backed by the wave.gif shipped in
+ * ``@/assets``. Keeping the component name + testid (``streaming-dots``)
+ * so callers and existing tests are not churned. The aria-live region is
+ * still announced as "Agent thinking" (override via the ``label`` prop).
  */
 export function StreamingDots({ className, label = 'Agent thinking' }) {
   return (
@@ -15,19 +15,15 @@ export function StreamingDots({ className, label = 'Agent thinking' }) {
       aria-live="polite"
       aria-label={label}
       data-testid="streaming-dots"
-      className={`inline-flex items-center gap-1 ${className ?? ''}`}
+      className={`inline-flex items-center ${className ?? ''}`}
     >
-      <span
-        className="block size-1.5 rounded-full bg-reef/70 animate-pulse"
-        style={{ animationDelay: '0ms' }}
-      />
-      <span
-        className="block size-1.5 rounded-full bg-reef/70 animate-pulse"
-        style={{ animationDelay: '180ms' }}
-      />
-      <span
-        className="block size-1.5 rounded-full bg-reef/70 animate-pulse"
-        style={{ animationDelay: '360ms' }}
+      <img
+        src={waveGif}
+        alt=""
+        aria-hidden="true"
+        data-testid="streaming-dots-gif"
+        className="h-5 w-auto select-none"
+        draggable={false}
       />
     </div>
   );

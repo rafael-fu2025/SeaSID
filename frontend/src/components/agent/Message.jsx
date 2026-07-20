@@ -3,7 +3,6 @@ import { cn } from '@/lib/utils';
 import MarkdownResponse from '@/components/MarkdownResponse';
 import { ToolCallGroup } from './ToolCallGroup';
 import { ThinkingBlock } from './ThinkingBlock';
-import { StreamingDots } from './StreamingDots';
 
 /**
  * Message — single bubble in the agent transcript.
@@ -14,8 +13,9 @@ import { StreamingDots } from './StreamingDots';
  *   2. Tool calls (`<ToolCallGroup>` collapses 1+ call into a card lane)
  *   3. Thinking (`<ThinkingBlock>` — collapsible, default closed)
  *   4. Body (the assistant's actual answer, rendered as Markdown)
- *   5. Streaming indicator (`<StreamingDots>`) when the answer is
- *      in flight but the first delta hasn't arrived yet
+ *   5. Hidden response body while the answer is in flight but the first
+ *      delta hasn't arrived yet. The "Agent thinking…" row in AgentFab
+ *      owns the loading indicator so the wave.gif only loads once.
  *
  * Variants:
  *   - `role: "user"`      → right-aligned-ish, neutral card
@@ -52,7 +52,11 @@ function AssistantMessage({ message }) {
   const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
   const hasThinking  = typeof message.thinking === 'string' && message.thinking.trim().length > 0;
   const hasContent   = typeof message.content  === 'string' && message.content.length > 0;
-  const showDotsOnly = isStreaming && !hasContent && !hasToolCalls;
+  // Hide the response bubble entirely while the agent is still waiting
+  // for the first stream chunk. The "Agent thinking…" row that lives in
+  // AgentFab renders the only loading indicator, which avoids loading
+  // the wave.gif twice (one inside this placeholder + one in the row).
+  const isPlaceholderState = isStreaming && !hasContent && !hasToolCalls;
 
   return (
     <div
@@ -89,21 +93,17 @@ function AssistantMessage({ message }) {
         </div>
       )}
 
-      <div
-        className={cn(
-          'max-w-[88%] border bg-reef/5 p-3 text-sm text-foreground',
-          'border-reef/30',
-        )}
-        data-testid="message-assistant-body"
-      >
-        {showDotsOnly ? (
-          <div className="py-1.5">
-            <StreamingDots />
-          </div>
-        ) : (
+      {!isPlaceholderState && (
+        <div
+          className={cn(
+            'w-full border bg-reef/5 p-3 text-sm text-foreground',
+            'border-reef/30',
+          )}
+          data-testid="message-assistant-body"
+        >
           <MarkdownResponse>{message.content ?? ''}</MarkdownResponse>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

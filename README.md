@@ -6,6 +6,14 @@ SeaSID combines a PyTorch **LSTM** (primary forecaster), **XGBoost** (baseline +
 
 ---
 
+## 📚 Documentation map
+
+| Doc | Purpose |
+|---|---|
+| `README.md` (this file) | Project description, quick start, feature vector, API surface, default dev accounts. |
+| [`SECURITY.md`](SECURITY.md) | Authoritative security guide: provider-key encryption, `SEASID_AUTH_SECRET`, leak response, vulnerability reporting. |
+| [`SeaSID.md`](SeaSID.md) | Original v1 spec with v1 → v2.1 drift summary, provider matrix, current auth/secret-management notes (section 0.2). |
+
 ## Architecture
 
 ```mermaid
@@ -73,7 +81,7 @@ flowchart LR
     class P3,P4 opt;
 ```
 
-The dashed boxes (Storm Glass, AQICN) are optional — when their env keys are unset the registry silently returns empty data and the rest of the system keeps working with Open-Meteo only.
+The dashed boxes (Storm Glass, AQICN) are optional — when no enabled database key exists the registry returns empty data and the rest of the system keeps working with Open-Meteo only.
 
 ---
 
@@ -102,8 +110,7 @@ The dashed boxes (Storm Glass, AQICN) are optional — when their env keys are u
 
 - Python 3.12+
 - Node.js 18+
-- `OPENAI_API_KEY` (or any OpenAI-compatible provider like MiniMax)
-- Optional: `STORMGLASS_API_KEY`, `AQICN_API_KEY`
+- An administrator account for configuring encrypted provider credentials
 
 ### 1. Backend Setup
 
@@ -120,10 +127,14 @@ pip install -r requirements.txt
 
 # Set up environment
 cp .env.example .env
-# Edit .env and add OPENAI_API_KEY (and any optional keys)
-# For MiniMax:
-#   OPENAI_BASE_URL=https://api.minimaxi.chat/v1
-#   OPENAI_MODEL=MiniMax-M3
+# Provider keys and the LLM base URL are configured after startup in
+# Settings -> API keys and stored in backend/data/seasid.db.
+# OPENAI_MODEL remains an optional non-secret runtime setting.
+
+# Configure API authentication (required for protected routes)
+#   SEASID_AUTH_SECRET=<random string, at least 32 characters>
+#   SEASID_ADMIN_USERNAME=admin
+#   SEASID_ADMIN_PASSWORD=<strong password>
 
 # Initialize database and seed data
 python -m scripts.init_db
@@ -153,6 +164,33 @@ npm run dev   # http://localhost:5173
 - API docs: http://localhost:8000/docs
 - Health: http://localhost:8000/api/v1/health
 
+### Authentication
+
+SeaSID uses signed bearer tokens for protected API routes. The health check,
+login endpoint, and site registry are public; forecasts, agent conversations,
+operator verification, ingestion, alerts, and experiment operations require a
+token. Roles are `viewer`, `operator`, `data_steward`, and `admin`; user
+records may be restricted to specific site keys.
+
+**Default credentials.** When neither `SEASID_AUTH_USERS_JSON` nor the
+`SEASID_ADMIN_USERNAME`/`SEASID_ADMIN_PASSWORD` pair is set, the API boots
+with the following built-in development accounts so a fresh checkout can log
+in immediately. A warning is logged once on startup:
+
+| Username         | Password        | Role          | Site scope                |
+| ---------------- | --------------- | ------------- | ------------------------- |
+| `admin`          | `admin-dev`     | `admin`       | `*` (all sites)           |
+| `steward`        | `steward-dev`   | `data_steward`| `*` (all sites)           |
+| `dauin-operator` | `operator-dev`  | `operator`    | `dauin_muck` only         |
+| `reef-operator`  | `operator-dev`  | `operator`    | `apo_reef` only           |
+| `viewer`         | `viewer-dev`    | `viewer`      | `*` (all sites)           |
+
+A placeholder JWT signing secret is used in this mode. For any non-dev
+deployment, configure real users via `SEASID_AUTH_USERS_JSON` and set
+`SEASID_AUTH_SECRET` to a random string of at least 32 characters. Set
+`SEASID_AUTH_REQUIRE_EXPLICIT_USERS=true` to disable the dev-default
+fallback entirely (login attempts then return 401/503).
+
 ---
 
 ## API Endpoints (`/api/v1/...`)
@@ -160,6 +198,8 @@ npm run dev   # http://localhost:5173
 | Method | Endpoint                       | Description                                       |
 | ------ | ------------------------------ | ------------------------------------------------- |
 | GET    | `/health`                    | DB + model status                                 |
+| POST   | `/auth/login`                | Exchange credentials for a bearer token           |
+| GET    | `/auth/me`                   | Inspect the current authenticated identity        |
 | GET    | `/sites`                     | List registered dive sites                        |
 | GET    | `/forecast?site=<key>`       | 48-hour forecast (includes optional`air` block) |
 | POST   | `/ingest`                    | Pull weather + marine + air + tide data           |
@@ -209,12 +249,12 @@ Three roles are decoupled and toggled per-role via environment variables:
 
 Each provider is also honouring per-site opt-out via the `air_provider_disabled` site flag (set when the nearest AQICN station is > 500 km away — the free tier would return meaningless distant data).
 
-| Provider                                    | Free tier         | Key env var            |
+| Provider                                    | Free tier         | Credential setup       |
 | ------------------------------------------- | ----------------- | ---------------------- |
-| **Open-Meteo** (weather + marine)     | unlimited, no key | —                     |
-| **Storm Glass** (marine augmentation) | 50 req/day        | `STORMGLASS_API_KEY` |
-| **AQICN** (air quality)               | 1000 req/day      | `AQICN_API_KEY`      |
-| **WorldTides** (tides only)           | 100 req/day       | `WORLDTIDES_API_KEY` |
+| **Open-Meteo** (weather + marine)     | unlimited, no key | none                   |
+| **Storm Glass** (marine augmentation) | 50 req/day        | Settings → API keys    |
+| **AQICN** (air quality)               | 1000 req/day      | Settings → API keys    |
+| **WorldTides** (tides only)           | 100 req/day       | Settings → API keys    |
 
 See [`backend/app/lib/providers/README.md`](backend/app/lib/providers/README.md) for the full contract.
 
@@ -264,14 +304,10 @@ docker compose up --build
 
 # Or just the backend
 docker build -t seasid .
-docker run -p 8000:8000 \
-  -e OPENAI_API_KEY=your-key \
-  -e STORMGLASS_API_KEY=optional \
-  -e AQICN_API_KEY=optional \
-  seasid
+docker run -p 8000:8000 -v seasid-data:/app/backend/data seasid
 ```
 
-The production image bundles the Vite-built frontend in a single Python image served on `:8000`.
+The production image bundles the Vite-built frontend in a single Python image served on `:8000`. Configure provider credentials in Settings after login; the volume persists the encrypted database and master key.
 
 ---
 

@@ -38,6 +38,8 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "ok"
         assert "version" in data
+        assert "selected_tier" in data
+        assert "selection_reason" in data
 
     async def test_health_has_model_info(self):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -69,6 +71,8 @@ class TestForecastEndpoint:
         assert data["site_key"] == "dauin_muck"
         assert "hours" in data
         assert len(data["hours"]) > 0
+        assert data["ml_bundle_loaded"] is False
+        assert data["forecast_source"] == "rule_based"
 
     async def test_forecast_invalid_site(self):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

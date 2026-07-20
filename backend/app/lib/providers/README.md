@@ -22,12 +22,13 @@ SEASID_PROVIDER_AIR=off
 
 # enable Storm Glass marine augmentation
 SEASID_PROVIDER_MARINE=stormglass
-STORMGLASS_API_KEY=xxxxxxxxxxxx
 
 # enable AQICN air-quality feed
 SEASID_PROVIDER_AIR=aqicn
-AQICN_API_KEY=xxxxxxxxxxxx
 ```
+
+Provider credentials are managed in **Settings → API keys**, encrypted in
+`backend/data/seasid.db`, and rotated among enabled keys for each provider.
 
 ## Adding a new provider
 
@@ -35,7 +36,7 @@ AQICN_API_KEY=xxxxxxxxxxxx
    `base.py`.
 2. Implement the `fetch_*` method(s).
 3. Return the canonical unit shapes documented in `base.py`.
-4. Tolerate missing API keys (return empty/None + log warning).
+4. Resolve keys through `app.lib.provider_keys` and tolerate missing keys.
 5. Register it in `registry._build_*()`.
 
 ## Schema migrations

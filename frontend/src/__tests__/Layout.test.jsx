@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import Layout from '@/components/Layout';
@@ -68,7 +68,8 @@ describe('Layout (cockpit shell) — desktop ≥ 1024 px', () => {
     expect(screen.getByTestId('brand-link')).toBeInTheDocument();
     expect(screen.getByTestId('child')).toBeInTheDocument();
     expect(screen.getByTestId('status-clock')).toBeInTheDocument();
-    expect(screen.getByText(/Dumaguete · v3\.0\.0/)).toBeInTheDocument();
+    expect(screen.queryByText(/Dumaguete · v3\.0\.0/)).not.toBeInTheDocument();
+    expect(screen.getByText('Team Shift v2')).toBeInTheDocument();
   });
 
   it('renders the expanded nav with icon + label for every page', () => {
@@ -78,10 +79,11 @@ describe('Layout (cockpit shell) — desktop ≥ 1024 px', () => {
     });
   });
 
-  it('exposes both collapse toggles (sidebar + inspector)', () => {
+  it('exposes the sidebar collapse toggle without an inspector rail', () => {
     renderLayout('/');
     expect(screen.getByTestId('nav-collapse')).toBeInTheDocument();
-    expect(screen.getByTestId('inspector-collapse')).toBeInTheDocument();
+    expect(screen.queryByTestId('right-rail')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('inspector-collapse')).not.toBeInTheDocument();
   });
 
   it('renders the AI Agent FAB and the ⌘K palette opener', () => {
@@ -93,6 +95,34 @@ describe('Layout (cockpit shell) — desktop ≥ 1024 px', () => {
   it('exposes a "Reset" link in the expanded sidebar footer', () => {
     renderLayout('/');
     expect(screen.getByLabelText(/reset cockpit layout/i)).toBeInTheDocument();
+  });
+
+  it('resets only cockpit keys and preserves authentication and Settings state', () => {
+    const previousStorage = window.localStorage;
+    const values = new Map();
+    const storage = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: (key) => values.delete(key),
+    };
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
+    try {
+      renderLayout('/');
+      localStorage.setItem('seasid.authToken', 'keep-me');
+      localStorage.setItem('seasid.settings.activeTab', 'agent');
+      localStorage.setItem('seasid.cockpit.rightCollapsed', '1');
+
+      fireEvent.click(screen.getByLabelText(/reset cockpit layout/i));
+
+      expect(localStorage.getItem('seasid.authToken')).toBe('keep-me');
+      expect(localStorage.getItem('seasid.settings.activeTab')).toBe('agent');
+      expect(localStorage.getItem('seasid.cockpit.rightCollapsed')).toBeNull();
+    } finally {
+      Object.defineProperty(window, 'localStorage', {
+        configurable: true,
+        value: previousStorage,
+      });
+    }
   });
 });
 
@@ -114,7 +144,7 @@ describe('Layout (cockpit shell) — mobile / tablet < 1024 px', () => {
     expect(screen.queryByTestId('right-rail')).toBeNull();
     // Drawer triggers are mounted
     expect(screen.getByTestId('open-mobile-nav')).toBeInTheDocument();
-    expect(screen.getByTestId('open-mobile-inspector')).toBeInTheDocument();
+    expect(screen.queryByTestId('open-mobile-inspector')).not.toBeInTheDocument();
   });
 
   it('still renders the page outlet, FAB and palette in the mobile shell', () => {

@@ -3,12 +3,12 @@ import { render, screen } from '@testing-library/react';
 import { StreamingDots } from '@/components/agent/StreamingDots';
 
 describe('StreamingDots', () => {
-  it('renders three dots with a polite live region', () => {
+  it('renders a polite live region announcing the agent thinking state', () => {
     render(<StreamingDots />);
     const root = screen.getByTestId('streaming-dots');
     expect(root).toHaveAttribute('role', 'status');
     expect(root).toHaveAttribute('aria-live', 'polite');
-    expect(root.children).toHaveLength(3);
+    expect(root).toHaveAttribute('aria-label', 'Agent thinking');
   });
 
   it('uses a custom label when provided', () => {
@@ -18,12 +18,18 @@ describe('StreamingDots', () => {
     ).toBeInTheDocument();
   });
 
-  it('applies animate-pulse + staggered delays so dots pulse in a wave', () => {
+  it('renders the wave.gif image as its single visual child', () => {
     render(<StreamingDots />);
-    const dots = screen.getByTestId('streaming-dots').children;
-    expect(dots[0]).toHaveClass('animate-pulse');
-    expect(dots[0]).toHaveStyle({ animationDelay: '0ms' });
-    expect(dots[1]).toHaveStyle({ animationDelay: '180ms' });
-    expect(dots[2]).toHaveStyle({ animationDelay: '360ms' });
+    const root = screen.getByTestId('streaming-dots');
+    expect(root.children).toHaveLength(1);
+    const gif = screen.getByTestId('streaming-dots-gif');
+    expect(gif.tagName).toBe('IMG');
+    // The gif URL is bundled by Vite into an asset path, so just assert
+    // a non-empty src and the aria-hidden flag that lets screen readers
+    // rely on the parent aria-label only.
+    expect(gif.getAttribute('src')).toMatch(/\.gif$/);
+    expect(gif).toHaveAttribute('aria-hidden', 'true');
+    expect(gif).toHaveAttribute('alt', '');
+    expect(gif).toHaveClass('h-5');
   });
 });

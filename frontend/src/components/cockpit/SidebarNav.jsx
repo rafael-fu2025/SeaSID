@@ -4,6 +4,7 @@ import {
   Settings2, Waves as WavesIcon, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import UserMenu from '@/components/UserMenu';
 import { cn } from '@/lib/utils';
 
 /**
@@ -70,10 +71,22 @@ export function SidebarNav({
         {!collapsed && (
           <div className="min-w-0 leading-tight">
             <div className="truncate text-sm font-semibold tracking-tight">SeaSID</div>
-            <div className="truncate text-[11px] text-muted-foreground">Dumaguete · v3</div>
+            <div className="truncate text-[11px] text-muted-foreground">Team Shift v2</div>
           </div>
         )}
       </NavLink>
+
+      {/* User menu — always visible. Clicking opens the account dropdown
+          downward into the nav area (safe space, never clipped). */}
+      <div
+        className={cn(
+          'shrink-0 border-b border-border py-2',
+          collapsed ? 'px-2' : 'px-3',
+        )}
+        data-testid="sidebar-user-menu-wrap"
+      >
+        <UserMenu />
+      </div>
 
       {/* Pages */}
       <nav

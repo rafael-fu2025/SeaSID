@@ -23,7 +23,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -44,12 +44,25 @@ from app.api.schemas import (
     LabelsResponse,
     OptimalWindow,
     SiteInfo,
+    LoginRequest,
+    PasswordChange,
+    TokenResponse,
+    UserInfo,
     VerifyRequest,
     VerifyResponse,
 )
 from app.api.services import get_forecast, submit_verification, get_labels
 from app.lib.db import init_db
 from app.lib.sites import get_all_sites, site_keys
+from app.auth import (
+    Principal,
+    authenticate_user,
+    auth_enabled,
+    create_access_token,
+    get_current_principal,
+)
+from app.api.admin import router as admin_router
+from app.lib.user_store import change_password as db_change_password
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +91,13 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("SeaSID API started (allowed origins: %s)", ALLOWED_ORIGINS)
     yield
+    # Best-effort cleanup of the MiniMax MCP subprocess so a server
+    # restart doesn't leave a zombie uvx process behind.
+    try:
+        from app.lib import agent_mcp
+        await agent_mcp.shutdown()
+    except Exception:
+        logger.debug("MCP shutdown skipped", exc_info=True)
     logger.info("SeaSID API shutting down")
 
 
@@ -89,6 +109,63 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+app.include_router(admin_router)
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+@app.post("/api/v1/auth/login", response_model=TokenResponse)
+def login(request: LoginRequest):
+    """Authenticate and return a JWT bearer token + the user profile.
+
+    When authentication is disabled, returns a synthetic admin token so the
+    UI keeps working in local dev. When enabled, looks up users in the DB
+    with a fallback to env-configured and dev-default credentials.
+    """
+    if not auth_enabled():
+        principal = Principal("dev", "dev", "admin", ("*",), authenticated=False)
+    else:
+        principal = authenticate_user(request.username, request.password)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+    token, expires_in = create_access_token(principal)
+    return TokenResponse(
+        access_token=token,
+        expires_in=expires_in,
+        user=UserInfo(
+            subject=principal.subject,
+            username=principal.username,
+            role=principal.role,
+            site_keys=list(principal.site_keys),
+        ),
+    )
+
+
+@app.get("/api/v1/auth/me", response_model=UserInfo)
+def me(principal: Principal = Depends(get_current_principal)) -> UserInfo:
+    """Return the current user decoded from the bearer token."""
+    if not auth_enabled():
+        return UserInfo(subject="dev", username="dev", role="admin", site_keys=["*"])
+    return UserInfo(
+        subject=principal.subject,
+        username=principal.username,
+        role=principal.role,
+        site_keys=list(principal.site_keys),
+    )
+
+
+@app.post("/api/v1/auth/password")
+def change_my_password(
+    payload: PasswordChange,
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    """Self-service password change for the signed-in user."""
+    if not auth_enabled():
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
+    ok = db_change_password(
+        principal.username, payload.current_password, payload.new_password,
+    )
+    if not ok:
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    return {"ok": True}
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,13 +208,18 @@ def health():
     }
 
     # Phase 3: include the tier qualifier so external monitors can see
-    # whether we're using the LSTM / XGBoost / rules and why.
-    import json
+    # whether we're using the LSTM / XGBoost / rules and why. ``tier``
+    # and ``reason`` are populated above by ``selected_tier()`` and are
+    # required by the ``HealthResponse`` schema; passing them here is
+    # what surfaces the "XGBoost vs rule_based" status in the Settings
+    # → About panel and the inspector rail.
     logger.info("Phase 3 model tier: %s (%s)", tier, reason)
     response = HealthResponse(
         status="ok",
         version="1.0.0",
         model_loaded=model_type,
+        selected_tier=tier,
+        selection_reason=reason,
         db_tables=len(tables),
         providers=providers,
     )
@@ -406,6 +488,61 @@ async def agent_briefing(site: str = Query(..., description="Site key")):
     except Exception as exc:
         logger.error("Briefing error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/v1/agent/tools")
+async def list_agent_tools() -> dict:
+    """Return the live tool registry (built-ins + MiniMax MCP web tools).
+
+    The Settings page calls this so it doesn't have to mirror
+    ``backend/app/lib/agent_tools.py`` in a frontend snapshot. Built-ins
+    are returned synchronously; MCP tools are discovered lazily on the
+    first call (which boots the subprocess). When the MCP is unavailable
+    (no key, no uvx, etc.) the response still succeeds with the built-ins.
+    """
+    from app.lib.agent_tools import _static_tool_definitions
+    from app.lib import agent_mcp
+
+    definitions = _static_tool_definitions()
+    mcp_status = "disabled"
+    mcp_tools: list[dict] = []
+    try:
+        mcp_tools_raw = await agent_mcp.get_mcp_tools()
+        mcp_status = "connected" if mcp_tools_raw else "unavailable"
+        for tool in mcp_tools_raw:
+            definitions.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema or {"type": "object", "properties": {}},
+                },
+            })
+            mcp_tools.append({
+                "name": tool.name,
+                "description": tool.description,
+                "source": "mcp_minimax",
+            })
+    except Exception as exc:
+        logger.debug("MCP tool discovery failed: %s", exc)
+        mcp_status = "error"
+
+    return {
+        "tools": [
+            {
+                "name": d["function"]["name"],
+                "description": d["function"].get("description", ""),
+                "parameters": d["function"].get("parameters", {}),
+                "source": "builtin",
+            }
+            for d in definitions
+        ],
+        "mcp": {
+            "status": mcp_status,
+            "server": "minimax",
+            "tools": mcp_tools,
+        },
+    }
 
 
 # ── Experiments ────────────────────────────────────────────────────────────

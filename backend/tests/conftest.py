@@ -16,6 +16,11 @@ import pandas as pd
 import numpy as np
 import pytest
 
+# Endpoint tests exercise business behavior without requiring credentials.
+# Production defaults remain fail-closed because authentication is enabled
+# unless this explicit test setting is present.
+os.environ.setdefault("SEASID_AUTH_ENABLED", "false")
+
 # Ensure backend root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

@@ -1,4 +1,25 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const AUTH_TOKEN_KEY = 'seasid.authToken';
+
+function readAuthToken() {
+  try { return window.localStorage.getItem(AUTH_TOKEN_KEY); } catch { return null; }
+}
+
+export function setAuthToken(token) {
+  try {
+    if (token) window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else window.localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {}
+}
+
+export function clearAuthToken() {
+  setAuthToken(null);
+}
+
+function authHeaders() {
+  const token = readAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 /**
  * streamChat — async generator that POSTs the user message to
@@ -17,7 +38,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export async function* streamChat({ message, conversationId, siteKey, signal }) {
   const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       message,
       conversation_id: conversationId,
@@ -27,6 +48,10 @@ export async function* streamChat({ message, conversationId, siteKey, signal }) 
   });
 
   if (!res.ok || !res.body) {
+    if (res.status === 401) {
+      clearAuthToken();
+      window.dispatchEvent(new CustomEvent('seasid:auth-expired'));
+    }
     let detail = '';
     try { detail = await res.text(); } catch {}
     throw new Error(
@@ -69,10 +94,19 @@ export async function* streamChat({ message, conversationId, siteKey, signal }) 
 
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`;
+  const { skipAuth = false, ...fetchOptions } = options;
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
+    ...fetchOptions,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(skipAuth ? {} : authHeaders()),
+      ...fetchOptions.headers,
+    },
   });
+  if (res.status === 401) {
+    clearAuthToken();
+    window.dispatchEvent(new CustomEvent('seasid:auth-expired'));
+  }
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(error.detail || `HTTP ${res.status}`);
@@ -81,11 +115,23 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  // Authentication
+  login: (username, password) =>
+    request('/api/v1/auth/login', {
+      method: 'POST',
+      skipAuth: true,
+      body: JSON.stringify({ username, password }),
+    }),
+  me: () => request('/api/v1/auth/me'),
+
   // Health
   health: () => request('/api/v1/health'),
 
   // Sites
   getSites: () => request('/api/v1/sites'),
+
+  // Agent
+  getAgentTools: () => request('/api/v1/agent/tools'),
 
   // Forecast
   getForecast: (siteKey) => request(`/api/v1/forecast?site=${siteKey}`),
@@ -139,4 +185,36 @@ export const api = {
       `/api/v1/active-learning/suggestions?site=${siteKey}&days=${days}&top_n=${topN}`,
     ),
   getActiveLearningSummary: () => request('/api/v1/active-learning/summary'),
+
+  // Self-service
+  changePassword: (currentPassword, newPassword) =>
+    request('/api/v1/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  // Admin: users
+  listUsers: () => request('/api/v1/admin/users'),
+  createUser: (payload) =>
+    request('/api/v1/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
+  updateUser: (id, payload) =>
+    request(`/api/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteUser: (id) => request(`/api/v1/admin/users/${id}`, { method: 'DELETE' }),
+
+  // Admin: provider API keys
+  listApiKeys: () => request('/api/v1/admin/api-keys'),
+  createApiKey: (payload) =>
+    request('/api/v1/admin/api-keys', { method: 'POST', body: JSON.stringify(payload) }),
+  updateApiKey: (id, payload) =>
+    request(`/api/v1/admin/api-keys/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteApiKey: (id) => request(`/api/v1/admin/api-keys/${id}`, { method: 'DELETE' }),
+  revealApiKey: (id) =>
+    request(`/api/v1/admin/api-keys/${id}/reveal`, { method: 'POST' }),
+  testApiKey: (id) =>
+    request(`/api/v1/admin/api-keys/${id}/test`, { method: 'POST' }),
+  updateProviderConfig: (provider, payload) =>
+    request(`/api/v1/admin/provider-configs/${provider}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 };

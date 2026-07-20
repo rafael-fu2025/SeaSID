@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Map as MapIcon, AlertTriangle, Crosshair } from 'lucide-react';
 import { api } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Map as MapIcon, AlertTriangle, Crosshair, Lock } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { RiskBadge } from '@/components/RiskBadge';
 import { FreshnessStack } from '@/components/FreshnessBadge';
 import { ForecastProvenance } from '@/components/ForecastProvenance';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { useTheme } from '@/theme/ThemeContext';
 
 /**
  * MapPage — OpenStreetMap view with site markers and a P(no-go) heat-radius.
@@ -24,6 +25,9 @@ import { cn } from '@/lib/utils';
  */
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ATTRIBUTION = '&copy; OpenStreetMap contributors';
+const DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png';
+const DARK_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
 const RISK_COLOR = {
   low:      '#6cca8f',
@@ -46,11 +50,16 @@ export default function MapPage() {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const layerGroupRef = useRef(null);
+  const pulsesRef = useRef([]);
+  const tileLayerRef = useRef(null);
+
+  const { theme } = useTheme();
 
   const [sites, setSites] = useState([]);
   const [forecasts, setForecasts] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [zoomUnlocked, setZoomUnlocked] = useState(false);
 
   // Pull sites + forecasts in parallel.
   useEffect(() => {
@@ -82,14 +91,46 @@ export default function MapPage() {
     const map = L.map(containerRef.current, {
       center: [9.12, 123.27],
       zoom: 11,
-      scrollWheelZoom: true,
+      // All zoom interactions are off until the user explicitly opts in via
+      // the click-to-enable overlay. This prevents accidental scroll-zoom
+      // while the user is reading the page or scrolling past the map.
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      touchZoom: false,
       zoomControl: true,
     });
-    L.tileLayer(TILE_URL, { attribution: ATTRIBUTION, maxZoom: 18 }).addTo(map);
+    // Track the tile layer so the theme-swap effect can replace it with a
+    // dark variant without recreating the entire Leaflet map instance.
+    tileLayerRef.current = L.tileLayer(TILE_URL, { attribution: ATTRIBUTION, maxZoom: 18 }).addTo(map);
     layerGroupRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; layerGroupRef.current = null; };
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      layerGroupRef.current = null;
+      tileLayerRef.current = null;
+    };
   }, []);
+
+  // Swap tile providers when the user toggles between light and dark theme.
+  // We keep the same Leaflet map instance alive; only the L.tileLayer is
+  // replaced so the rest of the markers, scroll-disable state, etc. are
+  // untouched. CartoDB's basemaps mirror OpenStreetMap data and provide a
+  // free dark variant suitable for our dashboard theme.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || typeof L.tileLayer !== 'function') return;
+    const previous = tileLayerRef.current;
+    const isDark = theme === 'dark';
+    const url = isDark ? DARK_TILE_URL : TILE_URL;
+    const attribution = isDark ? DARK_ATTRIBUTION : ATTRIBUTION;
+    const next = L.tileLayer(url, { attribution, maxZoom: 18, subdomains: 'abcd' }).addTo(map);
+    tileLayerRef.current = next;
+    if (previous && typeof previous.remove === 'function') {
+      try { previous.remove(); } catch (_) { /* ignore */ }
+    }
+  }, [theme]);
 
   // Re-measure Leaflet when the viewport changes. The agent Sheet is a
   // modal overlay, so it does not change this container's dimensions.
@@ -120,8 +161,13 @@ export default function MapPage() {
     const map = mapRef.current;
     if (!group || !map) return;
     group.clearLayers();
+    pulsesRef.current.forEach((p) => p.stop());
+    pulsesRef.current = [];
 
     const bounds = [];
+    const PULSE_AMPLITUDE_BY_LEVEL = { high: 600, moderate: 400, low: 220 };
+    const PULSE_PERIOD_MS = 2200;
+
     for (const site of sites) {
       const fc = forecasts[site.key];
       const cur = fc?.hours?.[0];
@@ -129,15 +175,38 @@ export default function MapPage() {
       const level = riskLevel(p);
       const color = RISK_COLOR[level];
 
-      const innerR = p == null ? 0 : 220 + p * 1200;
-      const outerR = innerR + 350;
+      // Larger, easy-to-read heat radius. The outer halo is widened in
+      // proportion so the risk band is obvious at the default zoom level.
+      const innerR = p == null ? 320 : 380 + p * 2000;
+      const outerR = innerR + 600;
 
       L.circle([site.lat, site.lon], {
         radius: outerR, color, fillColor: color, fillOpacity: 0.10, weight: 0, interactive: false,
       }).addTo(group);
-      L.circle([site.lat, site.lon], {
-        radius: innerR, color, fillColor: color, fillOpacity: 0.18, weight: 0, interactive: false,
+      const innerCircle = L.circle([site.lat, site.lon], {
+        radius: innerR, color, fillColor: color, fillOpacity: 0.22, weight: 0, interactive: false,
       }).addTo(group);
+
+      // Radar-style pulse: smoothly grow/shrink the inner heat radius on a
+      // requestAnimationFrame loop. Amplitude scales with risk severity so
+      // higher-risk sites draw the eye. The loop is cancelled on cleanup
+      // and on every re-render via the pulsesRef registry.
+      const amplitude = PULSE_AMPLITUDE_BY_LEVEL[level] ?? 180;
+      let rafId = 0;
+      let startTs = 0;
+      const tick = (ts) => {
+        if (!startTs) startTs = ts;
+        const t = ((ts - startTs) % PULSE_PERIOD_MS) / PULSE_PERIOD_MS;
+        const eased = 0.5 - 0.5 * Math.cos(2 * Math.PI * t);
+        try {
+          innerCircle.setRadius(innerR + amplitude * eased);
+        } catch (_) {
+          /* layer removed mid-frame; the outer useEffect cleanup will stop us */
+        }
+        rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+      pulsesRef.current.push({ stop: () => cancelAnimationFrame(rafId) });
 
       const air = fc?.air;
       const airLine = air?.available
@@ -152,9 +221,31 @@ export default function MapPage() {
           <div class="map-popup__row"><span>Current</span><strong>${escapeHtml(cur?.current_risk ?? '—')}</strong></div>
           ${airLine}
           <div class="map-popup__row"><span>Coords</span><strong>${fmt(site.lat)}, ${fmt(site.lon)}</strong></div>
+          <div class="map-popup__hint">Hover for a quick read; click for full details →</div>
         </div>
       `;
+
+      // Compact hover tooltip on top of the existing click popup. Leaflet
+      // shows the tooltip on mouseover and the popup on click by default,
+      // so users get a preview while moving toward the click target.
+      const tooltipHtml = `
+        <div class="map-tooltip">
+          <p class="map-tooltip__title">${escapeHtml(site.name)}</p>
+          <div class="map-tooltip__row"><span>P(no-go)</span><strong>${fmtPct(p)}</strong></div>
+          <div class="map-tooltip__row"><span>Current</span><strong>${escapeHtml(cur?.current_risk ?? '—')}</strong></div>
+          ${air?.available ? `<div class="map-tooltip__row"><span>Air</span><strong>${Math.round(air.aqi)}</strong></div>` : ''}
+          <div class="map-tooltip__hint">Click for full details →</div>
+        </div>
+      `;
+
       L.marker([site.lat, site.lon])
+        .bindTooltip(tooltipHtml, {
+          className: 'map-site-tooltip',
+          direction: 'top',
+          offset: [0, -14],
+          opacity: 1,
+          sticky: true,
+        })
         .bindPopup(popupHtml, { className: 'map-site-marker-popup' })
         .addTo(group);
       bounds.push([site.lat, site.lon]);
@@ -162,6 +253,52 @@ export default function MapPage() {
 
     if (bounds.length >= 1) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 12 });
   }, [sites, forecasts]);
+
+  // Stop any in-flight pulse animations when the map unmounts so the
+  // requestAnimationFrame loops don't keep running against removed layers.
+  useEffect(() => () => {
+    pulsesRef.current.forEach((p) => p.stop());
+    pulsesRef.current = [];
+  }, []);
+
+  // Click-to-enable interaction model: zoom, scroll, drag, and double-click
+  // are intentionally inert until the user opts in, so accidental scrolls
+  // across the map never change the view.
+  const enableMapInteraction = () => {
+    const m = mapRef.current;
+    if (!m) return;
+    const unlock = (handler) => {
+      if (handler && typeof handler.enable === 'function') {
+        try { handler.enable(); } catch (_) { /* harmless in test envs */ }
+      }
+    };
+    unlock(m.scrollWheelZoom);
+    unlock(m.doubleClickZoom);
+    unlock(m.boxZoom);
+    unlock(m.touchZoom);
+    if (m.dragging && typeof m.dragging.enable === 'function') {
+      try { m.dragging.enable(); } catch (_) { /* ignore */ }
+    }
+    setZoomUnlocked(true);
+  };
+
+  const lockMapInteraction = () => {
+    const m = mapRef.current;
+    if (!m) return;
+    const lock = (handler) => {
+      if (handler && typeof handler.disable === 'function') {
+        try { handler.disable(); } catch (_) { /* harmless in test envs */ }
+      }
+    };
+    lock(m.scrollWheelZoom);
+    lock(m.doubleClickZoom);
+    lock(m.boxZoom);
+    lock(m.touchZoom);
+    if (m.dragging && typeof m.dragging.disable === 'function') {
+      try { m.dragging.disable(); } catch (_) { /* ignore */ }
+    }
+    setZoomUnlocked(false);
+  };
 
   return (
     <div className="flex min-w-0 flex-col gap-6 p-6 lg:p-8">
@@ -213,11 +350,38 @@ export default function MapPage() {
             <LegendInline />
           </div>
         </CardHeader>
-        <div
-          ref={containerRef}
-          className="h-[480px] w-full max-w-full"
-          data-testid="leaflet-map"
-        />
+        <div className="relative h-[480px] w-full max-w-full">
+          <div
+            ref={containerRef}
+            className="absolute inset-0"
+            data-testid="leaflet-map"
+          />
+          {!zoomUnlocked && (
+            <button
+              type="button"
+              data-testid="map-enable-overlay"
+              onClick={enableMapInteraction}
+              aria-label="Click to enable map zoom and scroll"
+              className="absolute inset-0 z-[1000] flex cursor-pointer items-center justify-center bg-foreground/15 backdrop-blur-[2px] transition-opacity hover:bg-foreground/20"
+            >
+              <span className="flex items-center gap-2 rounded-full bg-background/95 px-4 py-2 text-sm font-medium text-foreground shadow-md ring-1 ring-border">
+                <Crosshair className="size-4 text-reef" />
+                Click to enable zoom &amp; scroll
+              </span>
+            </button>
+          )}
+          {zoomUnlocked && (
+            <button
+              type="button"
+              data-testid="map-lock-toggle"
+              onClick={lockMapInteraction}
+              aria-label="Lock map to disable zoom and scroll"
+              className="absolute bottom-3 left-3 z-[600] rounded-md bg-background/90 px-2.5 py-1 text-xs font-medium text-foreground shadow ring-1 ring-border transition-colors hover:bg-background"
+            >
+              <Lock className="mr-1 inline-block size-3" aria-hidden="true" /> Lock map
+            </button>
+          )}
+        </div>
       </Card>
 
       {/* Site list */}
@@ -226,7 +390,7 @@ export default function MapPage() {
           <div>
             <h2 className="text-base font-semibold tracking-tight">Sites on this map</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              Live P(no-go) per site · click a marker for details.
+              Live P(no-go) per site · hover a marker for a quick read, click for full details.
             </p>
           </div>
           <Badge variant="secondary" className="font-mono">

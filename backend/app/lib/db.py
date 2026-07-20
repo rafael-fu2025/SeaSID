@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Integer,
     String,
@@ -21,6 +22,8 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -171,6 +174,7 @@ class NoDiveLabel(Base):
     # high-confidence labels contribute more than guesses.
     no_go_reason = Column(String(20), nullable=True)  # viz, current, swell, weather, boat, other
     confidence = Column(String(8), nullable=True)      # low, med, high
+    actor_id = Column(String(100), nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint("site_key", "date", "source", name="uq_label_site_date_source"),
@@ -193,6 +197,7 @@ class OperatorVerification(Base):
     # Phase 5: structured reason + confidence — see NoDiveLabel docstring.
     no_go_reason = Column(String(20), nullable=True)
     confidence = Column(String(8), nullable=True)
+    actor_id = Column(String(100), nullable=True, index=True)
 
     # One verification per (site, date, operator). NULL operators are treated
     # as distinct by both SQLite and PostgreSQL, so anonymous submissions do
@@ -228,6 +233,7 @@ class AgentConversation(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     conversation_id = Column(String(100), nullable=False, index=True)
+    owner_id = Column(String(100), nullable=True, index=True)
     site_key = Column(String(50), nullable=True)
     role = Column(String(20), nullable=False)  # user, assistant, tool
     content = Column(Text, nullable=False)
@@ -235,8 +241,101 @@ class AgentConversation(Base):
     ts = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class User(Base):
+    """Authentication identity managed by SeaSID (replaces env-only config).
+
+    The ``password_hash`` is a PBKDF2-SHA256 envelope (see app.auth.hash_password).
+    ``site_keys`` is a JSON list of strings; ``["*"]`` means full access.
+    """
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    subject = Column(String(100), nullable=False, unique=True, index=True)
+    username = Column(String(100), nullable=False, unique=True, index=True)
+    role = Column(String(20), nullable=False, default="viewer")
+    site_keys_json = Column(Text, nullable=False, default='["*"]')
+    password_hash = Column(String(255), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class ProviderApiKey(Base):
+    """Provider API key with rotation + cooldown tracking.
+
+    ``provider`` is a logical name (``llm``, ``stormglass``, ``aqicn``,
+    ``tides``, etc.). ``value_encrypted`` stores the Fernet-style envelope
+    produced by :mod:`app.secret_store`. The raw value is never returned
+    through the API; clients receive ``value_preview`` (last 4 chars only).
+    """
+
+    __tablename__ = "provider_api_keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(50), nullable=False, index=True)
+    label = Column(String(120), nullable=True)
+    value_encrypted = Column(Text, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by_subject = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    error_count = Column(Integer, nullable=False, default=0)
+    cooldown_until = Column(DateTime(timezone=True), nullable=True)
+    total_uses = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "label", name="uq_api_key_provider_label"),
+    )
+
+
+class ProviderConfig(Base):
+    """Non-secret settings shared by every key for one provider."""
+
+    __tablename__ = "provider_configs"
+
+    provider = Column(String(50), primary_key=True)
+    base_url = Column(Text, nullable=True)
+    updated_by_subject = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 # ── Initialization ─────────────────────────────────────────────────────────
+def _ensure_legacy_columns() -> None:
+    """Add nullable identity columns to databases created before auth."""
+    inspector = inspect(engine)
+    additions = {
+        "no_dive_labels": {"actor_id": "VARCHAR(100)"},
+        "operator_verifications": {"actor_id": "VARCHAR(100)"},
+        "agent_conversations": {"owner_id": "VARCHAR(100)"},
+    }
+    with engine.begin() as connection:
+        for table, columns in additions.items():
+            existing = {column["name"] for column in inspector.get_columns(table)}
+            for column, ddl in columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def init_db():
-    """Create all tables. Safe to call multiple times (CREATE IF NOT EXISTS)."""
+    """Create tables and apply additive identity columns for legacy databases."""
     Base.metadata.create_all(bind=engine)
+    _ensure_legacy_columns()
     logger.info("Database initialized at %s", DB_PATH)

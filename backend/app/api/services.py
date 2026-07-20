@@ -261,7 +261,7 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
 
     # Optional air-quality block — present only when AQICN has populated
     # the air_quality_obs table for this site. Optional so deployments
-    # without AQICN_API_KEY still get a clean forecast response.
+    # without an AQICN database key still get a clean forecast response.
     air = _latest_air_snapshot(site_key)
 
     # ── Freshness + provenance (roadmap #8) ───────────────────────────
@@ -321,6 +321,9 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
         "generated_at": now.isoformat(),
         "hours": forecast_hours,
         "optimal_window": optimal,
+        # A loaded ML bundle can still have individual hours substituted with
+        # the rules fallback, so keep this distinct from forecast_source.
+        "ml_bundle_loaded": bundle is not None,
         # Roadmap #8 fields
         "data_as_of": data_as_of,
         "freshness": [f.to_dict() for f in freshness_list],
@@ -344,7 +347,11 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     return out
 
 
-def submit_verification(data: dict) -> dict:
+def submit_verification(
+    data: dict,
+    actor_id: str | None = None,
+    actor_username: str | None = None,
+) -> dict:
     """Process an operator verification submission."""
     site = get_site(data["site_key"])
     if site is None:
@@ -371,11 +378,13 @@ def submit_verification(data: dict) -> dict:
         if no_go_reason is None and data["verdict"] != "dive":
             no_go_reason = "other"
         confidence = data.get("confidence") or "med"
+        operator = actor_username or data.get("operator")
 
         # Save to operator_verifications
         verification = db.OperatorVerification(
             site_key=data["site_key"],
-            operator=data.get("operator"),
+            operator=operator,
+            actor_id=actor_id,
             date=label_date,
             verdict=data["verdict"],
             actual_viz_m=data.get("actual_viz_m"),
@@ -392,7 +401,8 @@ def submit_verification(data: dict) -> dict:
             site_key=data["site_key"],
             date=label_date,
             label=data["verdict"],
-            source=f"operator_{data.get('operator', 'anon')}",
+            source=f"operator_{operator or 'anon'}",
+            actor_id=actor_id,
             actual_viz_m=data.get("actual_viz_m"),
             actual_current=data.get("actual_current"),
             comments=data.get("comments"),

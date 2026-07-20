@@ -1,1 +1,13 @@
-{"auc_roc": 0.8, "n_samples": 1000, "arch": "lstm"}
+{
+  "accuracy": 0.8788282290279628,
+  "precision": 0.8915989159891599,
+  "recall": 0.9835575485799701,
+  "f1": 0.9353233830845771,
+  "auc_roc": 0.6499781253417916,
+  "epochs_trained": 11,
+  "best_val_loss": 0.29489031434059143,
+  "final_train_loss": 0.11093140188604593,
+  "n_samples": 751,
+  "arch": "lstm",
+  "pos_weight": 0.12257099896669388
+}

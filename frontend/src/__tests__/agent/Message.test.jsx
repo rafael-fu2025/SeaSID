@@ -39,7 +39,11 @@ describe('Message', () => {
         message={{ role: 'assistant', content: '', status: 'streaming' }}
       />,
     );
-    expect(screen.getByTestId('streaming-dots')).toBeInTheDocument();
+    // The inline placeholder (and its wave.gif) is gone while we wait for
+    // the first stream chunk — AgentFab's "Agent thinking…" row owns the
+    // single loading indicator now.
+    expect(screen.queryByTestId('streaming-dots')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('message-assistant-body')).not.toBeInTheDocument();
   });
 
   it('hides streaming dots once any content has arrived', () => {

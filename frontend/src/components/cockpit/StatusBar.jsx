@@ -82,8 +82,6 @@ export function StatusBar({ onOpenPalette, onOpenAgent, children }) {
 
       <Separator orientation="vertical" className="hidden h-4 sm:block" />
 
-      <span className="hidden font-mono md:inline">Dumaguete · v3.0.0</span>
-
       <div className="flex-1" />
 
       <span className="font-mono text-foreground" data-testid="status-clock">

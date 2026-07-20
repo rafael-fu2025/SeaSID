@@ -14,9 +14,7 @@ Providers are selected at runtime via environment variables:
   SEASID_PROVIDER_MARINE=open_meteo           # default; set to "stormglass" to enable
   SEASID_PROVIDER_AIR=off                     # default; set to "aqicn" to enable
 
-API keys (when required):
-  STORMGLASS_API_KEY=...
-  AQICN_API_KEY=...
+API keys are configured in Settings and encrypted in the SeaSID database.
 """
 
 from app.lib.providers.base import (

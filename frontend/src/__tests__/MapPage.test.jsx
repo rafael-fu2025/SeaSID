@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import MapPage from '../pages/MapPage';
 import { api } from '../api';
@@ -9,11 +9,26 @@ import { api } from '../api';
 // surfaces the site list + skeleton + leaflet container.
 vi.mock('leaflet', () => ({
   default: {
-    map: () => ({ fitBounds: () => {}, remove: () => {}, on: () => {}, invalidateSize: () => {} }),
+    map: () => ({
+      fitBounds: () => {},
+      remove: () => {},
+      on: () => {},
+      off: () => {},
+      invalidateSize: () => {},
+      scrollWheelZoom: { enable: () => {}, disable: () => {} },
+      doubleClickZoom: { enable: () => {}, disable: () => {} },
+      boxZoom: { enable: () => {}, disable: () => {} },
+      touchZoom: { enable: () => {}, disable: () => {} },
+      dragging: { enable: () => {}, disable: () => {} },
+    }),
     tileLayer: () => ({ addTo: () => {} }),
     layerGroup: () => ({ addTo: () => ({ clearLayers: () => {}, addTo: () => {} }), clearLayers: () => {} }),
-    circle: () => ({ addTo: () => {} }),
-    marker: () => ({ bindPopup: () => ({ addTo: () => {} }) }),
+    circle: () => ({ addTo: () => ({ setRadius: () => {} }), setRadius: () => {} }),
+    marker: () => ({
+      bindTooltip: () => ({ bindPopup: () => ({ addTo: () => {} }), addTo: () => {} }),
+      bindPopup: () => ({ addTo: () => {} }),
+      addTo: () => {},
+    }),
   },
 }));
 
@@ -71,7 +86,12 @@ describe('Map page', () => {
     const initialClassName = container.className;
     // The enclosing card creates a low stacking context, keeping Leaflet's
     // high-z-index panes below the agent Sheet backdrop.
-    expect(container.closest('[class*="relative"]')).toHaveClass('z-0');
+    // The leaflet container sits inside an absolute-positioned wrapper that
+    // is itself inside the Card. The Card owns the `relative z-0` stacking
+    // context that keeps Leaflet's panes below the Sheet backdrop.
+    const cardWithZ0 = container.closest('[class*="z-0"]');
+    expect(cardWithZ0).not.toBeNull();
+    expect(cardWithZ0).toHaveClass('relative');
 
     // The sheet is an overlay, not a layout resize. Opening it must not
     // alter the Leaflet container or trigger its expensive tile repaint.
@@ -80,5 +100,44 @@ describe('Map page', () => {
     });
     expect(container.className).toBe(initialClassName);
     expect(container).not.toHaveAttribute('aria-hidden');
+  });
+
+  it('shows a click-to-enable overlay by default and hides it after the user opts in', async () => {
+    render(<MemoryRouter><MapPage /></MemoryRouter>);
+    const overlay = await screen.findByTestId('map-enable-overlay');
+    expect(overlay).toBeInTheDocument();
+    expect(overlay.getAttribute('aria-label')).toMatch(/enable map zoom/i);
+
+    // Opting in should remove the overlay and surface the lock toggle.
+    fireEvent.click(overlay);
+    await waitFor(() => {
+      expect(screen.queryByTestId('map-enable-overlay')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('map-lock-toggle')).toBeInTheDocument();
+  });
+
+  it('re-enables the click-to-enable overlay when the user locks the map', async () => {
+    render(<MemoryRouter><MapPage /></MemoryRouter>);
+    const overlay = await screen.findByTestId('map-enable-overlay');
+    fireEvent.click(overlay);
+    const lockToggle = await screen.findByTestId('map-lock-toggle');
+    fireEvent.click(lockToggle);
+    await waitFor(() => {
+      expect(screen.getByTestId('map-enable-overlay')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('map-lock-toggle')).not.toBeInTheDocument();
+  });
+
+  it('renders the lock toggle with a Lucide Lock icon and "Lock map" label (no emoji)', async () => {
+    render(<MemoryRouter><MapPage /></MemoryRouter>);
+    const overlay = await screen.findByTestId('map-enable-overlay');
+    fireEvent.click(overlay);
+    const lockToggle = await screen.findByTestId('map-lock-toggle');
+    // Lucide icons render as <svg> elements with the `lucide` class.
+    const lockIcon = lockToggle.querySelector('svg.lucide-lock');
+    expect(lockIcon).not.toBeNull();
+    // The label is plain text; no lock/padlock emoji character survives.
+    expect(lockToggle.textContent).toMatch(/Lock map/);
+    expect(lockToggle.textContent).not.toMatch(/[\u{1F512}\u{1F513}]/u);
   });
 });

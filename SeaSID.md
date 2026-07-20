@@ -1,6 +1,6 @@
 # SeaSID — Build-from-scratch spec
 
-> **Status — v1 design doc; the shipped codebase is v2.1.**
+> **Status — historical v1 design doc with current implementation drift notes.**
 > This document was the original v1 spec (XGBoost-only, 5 tables, 8 endpoints,
 > React + Recharts, Render + nginx + systemd). The codebase shipped as **v2.1**:
 > LSTM primary + XGBoost baseline + GRU ablation, 6 tables (added
@@ -10,7 +10,10 @@
 > `get_air_quality`), a pluggable provider registry (Open-Meteo default +
 > Storm Glass marine + AQICN air), 14-feature vector, plain-CSS React
 > (no Recharts, no Axios, no CSS Modules), Docker-only deploy.
-> See section "**v1 → v2.1 Drift Summary**" below; for the live surface
+> The current implementation also includes bearer-token authentication,
+> role/site-scoped users, admin-managed encrypted provider keys, database-backed
+> LLM base URL configuration, provider-key rotation, Profile/Users/API-key UI,
+> and SSE agent responses. See the drift summary below; for the live surface
 > consult the docstrings in `backend/app/api/{main,services,schemas}.py`
 > and the `src/pages/*` files. **`README.md` is the project description.**
 
@@ -21,24 +24,26 @@
 | Primary model | XGBoost only | **LSTM (PyTorch) primary + XGBoost baseline + GRU ablation** |
 | Feature vector | 11 columns | **14 columns** (adds `aqi_recent`, `pm25_recent`, `wave_period_s_mean`) |
 | Endpoints (`/api/v1/...`) | 8 | **13** (adds `/agent/chat`, `/agent/briefing`, `/experiments/{run,results}`, `/labels`, `/ingest`, `/alerts/run`) |
-| Tables | 5 | **6** (adds `agent_conversations`, `marine_obs`, `air_quality_obs`) |
+| Tables | 5 | **Expanded SQLAlchemy schema**, including observations, conversations, users, provider keys, and provider configs |
 | Provider layer | hardcoded Open-Meteo + WorldTides | **pluggable registry** (`SEASID_PROVIDER_{WEATHER,MARINE,AIR}`) — Open-Meteo default, Storm Glass optional, AQICN optional |
 | Agent tools | 6 | **7** (adds `get_air_quality`) |
-| LLM provider | OpenAI gpt-4o | **OpenAI-compatible** (MiniMax-M3 by default, swappable via `OPENAI_BASE_URL`) |
-| Frontend pages | Home · Forecast · Historical · OperatorVerify | Dashboard · Forecast · Map · Experiments · Verify · Settings |
+| LLM provider | OpenAI gpt-4o | **OpenAI-compatible**, with shared base URL and rotating keys stored in SQLite |
+| Authentication | none | **Signed bearer tokens**, four roles, site scopes, profile/logout, and admin user management |
+| Provider credentials | `.env` variables | **Encrypted SQLite records**, managed by admins in Settings; no runtime env fallback |
+| Frontend pages | Home · Forecast · Historical · OperatorVerify | Dashboard · Forecast · Map · Experiments · Verify · Settings · Profile |
 | Frontend stack | React + Recharts + Axios + CSS Modules | React + plain CSS (no Recharts, no Axios, no CSS Modules) |
-| Sidebar | always visible, fixed 232 px | **responsive** (drawer < 768 · narrow rail 768–1023 · collapsible full ≥ 1024) |
+| Sidebar | always visible, fixed 232 px | **collapsible desktop navigation + mobile drawer**; legacy inspector rail removed |
 | CORS | explicit allow-list of 3 origins | **explicit allow-list, overridable via `SEASID_ALLOWED_ORIGINS`** |
 | Forecast horizon | 24 h | **48 h** + `optimal_window` + optional `air` block |
 | Deploy | `render.yaml` (web + static) + nginx + systemd | **Single Docker image with frontend baked in** |
 | `/forecast` write behaviour | triggered alerts on every GET | **read-only** — alerts go through `POST /api/v1/alerts/run` |
 | Model reload | manual process restart | **automatic** on `POST /api/v1/experiments/run` |
-| Backend tests | 16 (section 13) | **66 passing** across 8 files |
-| Frontend tests | 8 (section 13) | **81 passing** across 20 files (Vitest + RTL) |
+| Backend tests | 16 (section 13) | **pytest suites** covering API, auth, providers, models, and admin workflows |
+| Frontend tests | 8 (section 13) | **Vitest + RTL suites** covering pages, agent streaming, settings, and admin UI |
 | Python startup | `@app.on_event("startup")` (deprecated) | **`lifespan` async context manager** |
 | DB session resolution | `from app.lib.db import SessionLocal` (binds at import) | **qualified `db.SessionLocal()` access** so test fixtures can monkey-patch |
 | AI agent response | emoji-friendly markdown | **emoji-stripped**, professional typography via `MarkdownResponse` |
-| Agent popover | full-page `/agent` route | **floating FAB** on every page (400 × 560 popover) |
+| Agent popover | full-page `/agent` route | **floating FAB + responsive Sheet** with SSE streaming |
 
 **Reading guide:** sections 1–9 describe original v1 design intent and remain
 a reference for the data model, feature contract, and product framing.
@@ -46,19 +51,33 @@ Sections 10–17 describe endpoints, UI, deployment, and tests as they were
 **specified in v1** — for the live surface, consult the docstrings at the top
 of `backend/app/api/main.py` and the `src/pages/*` components.
 
-### 0.1 v2.1 Provider Matrix (new in 2.1)
+### 0.1 Current provider matrix
 
-| Role | Default | Optional | Env var to switch | Required key |
-|------|---------|----------|-------------------|--------------|
-| `weather` (precip, wind) | `open_meteo` | — | `SEASID_PROVIDER_WEATHER` | — |
-| `marine` (wave, swell, currents, water temp) | `open_meteo` | `stormglass` | `SEASID_PROVIDER_MARINE` | `STORMGLASS_API_KEY` |
-| `air` (AQI, PM2.5, PM10, O₃, NO₂) | `off` | `aqicn` | `SEASID_PROVIDER_AIR` | `AQICN_API_KEY` |
-| `tide` (tides only) | WorldTides | — | — | `WORLDTIDES_API_KEY` (optional — degrades to 0) |
+| Role | Default | Optional | Env var to switch | Credential setup |
+|------|---------|----------|-------------------|------------------|
+| `weather` (precip, wind) | `open_meteo` | — | `SEASID_PROVIDER_WEATHER` | none |
+| `marine` (wave, swell, currents, water temp) | `open_meteo` | `stormglass` | `SEASID_PROVIDER_MARINE` | Settings → API keys |
+| `air` (AQI, PM2.5, PM10, O₃, NO₂) | `off` | `aqicn` | `SEASID_PROVIDER_AIR` | Settings → API keys |
+| `tide` (tides only) | WorldTides | — | — | Settings → API keys (optional) |
 
 Open-Meteo is unlimited and key-less. Storm Glass and AQICN are free-tier
 constrained (50 / 1000 req/day respectively). The agent tool `get_air_quality`
 is now wired to this provider and returns a structured snapshot or a polite
 "not available" hint.
+
+### 0.2 Current authentication and secret management
+
+- Protected APIs require signed bearer tokens with `viewer`, `operator`,
+  `data_steward`, or `admin` role claims and optional site scopes.
+- Administrators manage users, multiple rotating keys per provider, and the
+  shared LLM base URL from tabbed Settings UI.
+- Provider credentials are encrypted in `backend/data/seasid.db`; the master
+  key comes from `SEASID_DB_ENCRYPTION_KEY` or gitignored
+  `backend/data/seasid.key`.
+- The README Authentication section lists all built-in development accounts:
+  `admin`, `steward`, `dauin-operator`, `reef-operator`, and `viewer`.
+- Production must set `SEASID_AUTH_REQUIRE_EXPLICIT_USERS=true` and replace the
+  development signing secret and accounts.
 
 ---
 
@@ -119,8 +138,8 @@ SeaSID/
 │   │       ├── sites.py                  # Site registry (key, name, lat/lon, type)
 │   │       ├── db.py                     # SQLAlchemy models + session (WAL mode)
 │   │       ├── weather.py                # Open-Meteo client + synthetic fallback
-│   │       ├── tides.py                  # WorldTides client (loads .env)
-│   │       ├── ingest.py                 # One-shot pull (loads .env)
+│   │       ├── tides.py                  # WorldTides client (rotating DB keys)
+│   │       ├── ingest.py                 # One-shot provider pull
 │   │       ├── features.py               # Feature engineering (train + infer)
 │   │       ├── scoring.py                # Rule-based baseline (Baseline 1)
 │   │       ├── model_xgb.py             # XGBoost baseline (Baseline 2)
@@ -487,7 +506,7 @@ def get_model_type(bundle: dict) -> Literal["lstm", "xgboost", "rule_based"]
 
 - **Endpoint:** `https://www.worldtides.info/api/v3`
 - **Params:** `heights`, `lat`, `lon`, `length=86400`, `step=3600`, `datum=MSL`
-- Read `WORLDTIDES_API_KEY` from `.env`. If missing or request fails, set tide columns to `0` in features but log a warning.
+- Resolve a rotating WorldTides key from the encrypted provider-key table. If missing or the request fails, set tide columns to `0` in features and log a warning.
 
 ### Dataset expansion (`scripts/expand_dataset.py`) — NEW
 
@@ -660,7 +679,7 @@ probability) in your recommendations. Be direct and safety-conscious."""
 
 class SeaSIDAgent:
     def __init__(self, model: str = "gpt-4o-mini"):
-        self.client = OpenAI()  # reads OPENAI_API_KEY from env
+        self.client = OpenAI(api_key=db_key, base_url=db_provider_config.base_url)
         self.model = model
 
     def chat(self, user_message: str, site_key: str | None = None,
@@ -1202,10 +1221,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: WORLDTIDES_API_KEY
-        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_USER
@@ -1296,14 +1311,11 @@ systemd unit for the FastAPI backend only. The React frontend is served as stati
 ## 17. `.env.example`
 
 ```env
-# Required: OpenAI API key for the LLM Agent
-OPENAI_API_KEY=
+# Provider credentials and the LLM base URL are configured in Settings and
+# stored in backend/data/seasid.db. Provider credential env vars are ignored.
 
 # Optional: Use GPT-4o for higher quality (default: gpt-4o-mini)
 OPENAI_MODEL=gpt-4o-mini
-
-# Optional: tide heights (SeaSID degrades gracefully if missing)
-WORLDTIDES_API_KEY=
 
 # Optional: SMTP for email alerts (returns False if any field missing)
 SMTP_HOST=
