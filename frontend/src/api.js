@@ -177,6 +177,36 @@ export const api = {
   // Experiments
   getExperimentResults: () => request('/api/v1/experiments/results'),
   runExperiments: () => request('/api/v1/experiments/run', { method: 'POST' }),
+  // Streaming variant — opens an SSE connection and invokes the
+  // supplied callbacks for every event (`log`, `metric`, `status`,
+  // `done`, `error`). Returns a `close()` function so the UI can abort
+  // mid-run (e.g. on tab navigation).
+  runExperimentsStream: ({ onStatus, onLog, onMetric, onDone, onError, signal } = {}) => {
+    const url = `${API_BASE}/api/v1/experiments/run/stream`;
+    const es = new EventSource(url, { withCredentials: false });
+    es.onmessage = (e) => {
+      let payload;
+      try { payload = JSON.parse(e.data); } catch { return; }
+      switch (payload.type) {
+        case 'status':   onStatus?.(payload); break;
+        case 'log':      onLog?.(payload.line || ''); break;
+        case 'metric':   onMetric?.(payload); break;
+        case 'done':     onDone?.(payload); break;
+        case 'error':    onError?.(payload.message || 'Experiment failed'); break;
+        default: break;
+      }
+    };
+    es.onerror = () => {
+      onError?.('Lost connection to experiment stream');
+      es.close();
+    };
+    if (signal) {
+      const abort = () => es.close();
+      if (signal.aborted) es.close();
+      else signal.addEventListener('abort', abort, { once: true });
+    }
+    return () => es.close();
+  },
 
   // Active learning (Phase 8) — past dates where operator confirmation
   // would teach the model the most.

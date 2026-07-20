@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Play, RefreshCw, AlertTriangle, FlaskConical, BarChart3 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Play, RefreshCw, AlertTriangle, FlaskConical, BarChart3, Loader2, CheckCircle2, Circle } from 'lucide-react';
 import { api } from '@/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,14 @@ export default function Experiments() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
+  // Live progress state for the SSE stream:
+  //   runStage — one of: "idle" | "starting" | "loading" | "running" | "complete" | "error"
+  //   runLogs  — array of strings, one per "log" SSE event
+  //   runSamples — total samples seen in the "running" event
+  const [runStage, setRunStage] = useState('idle');
+  const [runLogs, setRunLogs] = useState([]);
+  const [runSamples, setRunSamples] = useState(null);
+  const closeStreamRef = useRef(null);
 
   const refresh = () => {
     setLoading(true);
@@ -59,18 +67,81 @@ export default function Experiments() {
     return () => window.removeEventListener('seasid:refresh', onRefresh);
   }, []);
 
-  const run = async () => {
+  // Tear down any open SSE stream on unmount.
+  useEffect(() => {
+    return () => { if (closeStreamRef.current) closeStreamRef.current(); };
+  }, []);
+
+  const run = () => {
     setRunning(true);
     setError(null);
-    try {
-      const res = await api.runExperiments();
-      if (res?.results) setResults(res.results);
-      else refresh();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setRunning(false);
+    setRunStage('starting');
+    setRunLogs([]);
+    setRunSamples(null);
+
+    const close = api.runExperimentsStream({
+      onStatus: (p) => {
+        setRunStage(p.stage);
+        if (typeof p.samples === 'number') setRunSamples(p.samples);
+      },
+      onLog: (line) => {
+        setRunLogs((prev) => {
+          const next = [...prev, line];
+          // Keep the log bounded so a long run doesn't blow up the DOM.
+          return next.length > 500 ? next.slice(next.length - 500) : next;
+        });
+      },
+      onMetric: (m) => {
+        // Update the live model_comparison in the results card so the
+        // operator sees metrics filling in as each model trains.
+        setResults((prev) => {
+          const mc = (prev && prev.model_comparison) || {};
+          return {
+            ...(prev || {}),
+            model_comparison: {
+              ...mc,
+              [m.model]: {
+                accuracy: m.accuracy,
+                precision: m.precision,
+                recall: m.recall,
+                f1: m.f1,
+                auc_roc: m.auc_roc,
+              },
+            },
+          };
+        });
+      },
+      onDone: (p) => {
+        setRunStage('complete');
+        if (p.results) {
+          setResults(p.results);
+        }
+        setRunning(false);
+        if (closeStreamRef.current) {
+          closeStreamRef.current();
+          closeStreamRef.current = null;
+        }
+      },
+      onError: (message) => {
+        setError(message);
+        setRunStage('error');
+        setRunning(false);
+        if (closeStreamRef.current) {
+          closeStreamRef.current();
+          closeStreamRef.current = null;
+        }
+      },
+    });
+    closeStreamRef.current = close;
+  };
+
+  const cancel = () => {
+    if (closeStreamRef.current) {
+      closeStreamRef.current();
+      closeStreamRef.current = null;
     }
+    setRunning(false);
+    setRunStage('idle');
   };
 
   return (
@@ -92,18 +163,25 @@ export default function Experiments() {
             <RefreshCw className="size-3.5" />
             <span>Refresh</span>
           </Button>
-          <Button
-            onClick={run}
-            disabled={running || loading}
-            data-testid="experiments-run"
-          >
-            {running ? (
-              <Skeleton className="size-3.5 rounded-full" />
-            ) : (
+          {running ? (
+            <Button
+              variant="secondary"
+              onClick={cancel}
+              data-testid="experiments-cancel"
+            >
+              <Circle className="size-3.5" />
+              <span>Cancel</span>
+            </Button>
+          ) : (
+            <Button
+              onClick={run}
+              disabled={running || loading}
+              data-testid="experiments-run"
+            >
               <Play className="size-3.5" />
-            )}
-            <span>{running ? 'Running…' : 'Run suite'}</span>
-          </Button>
+              <span>Run suite</span>
+            </Button>
+          )}
         </div>
       </header>
 
@@ -117,6 +195,14 @@ export default function Experiments() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {(running || runLogs.length > 0) && (
+        <RunProgress
+          stage={runStage}
+          samples={runSamples}
+          logs={runLogs}
+        />
       )}
 
       {loading && !results ? (
@@ -262,6 +348,107 @@ function ResultsCard({ results }) {
             )}
           </TableBody>
         </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Live progress card shown while / while-recently-after the suite ran.
+ *
+ * Three pieces of state drive the UI:
+ *   - stage:   "starting" | "loading" | "running" | "complete" | "error" | "idle"
+ *   - samples: total dataset size once known (used in the loading → running message)
+ *   - logs:    array of every "log" SSE event the server has emitted so far
+ *
+ * The log auto-scrolls to the bottom unless the user has scrolled away
+ * from the latest line — that way they can review an earlier step
+ * without the log jumping back every time a new line arrives. We track
+ * this with a `stickToBottom` ref that flips to false when the user
+ * scrolls up and back to true when they reach the bottom again.
+ */
+function RunProgress({ stage, samples, logs }) {
+  const scrollerRef = useRef(null);
+  const stickToBottomRef = useRef(true);
+
+  const onScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 24;
+  };
+
+  useEffect(() => {
+    if (stickToBottomRef.current && scrollerRef.current) {
+      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+    }
+  }, [logs.length]);
+
+  const stageLabel = {
+    starting: 'Starting…',
+    loading: 'Loading dataset…',
+    running: samples
+      ? `Training on ${samples} samples…`
+      : 'Training models…',
+    complete: 'Complete',
+    error: 'Failed',
+    idle: 'Idle',
+  }[stage] || stage;
+
+  const StageIcon = stage === 'running' || stage === 'loading' || stage === 'starting'
+    ? Loader2
+    : stage === 'complete'
+      ? CheckCircle2
+      : Circle;
+
+  return (
+    <Card data-testid="experiments-run-progress">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <StageIcon
+              className={
+                stage === 'running' || stage === 'loading' || stage === 'starting'
+                  ? 'size-4 animate-spin text-reef'
+                  : stage === 'complete'
+                    ? 'size-4 text-emerald-500'
+                    : 'size-4 text-muted-foreground'
+              }
+            />
+            <CardTitle className="text-base">Run progress</CardTitle>
+          </div>
+          <Badge
+            variant={stage === 'complete' ? 'default' : stage === 'error' ? 'destructive' : 'secondary'}
+            data-testid="experiments-stage"
+          >
+            {stageLabel}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div
+          ref={scrollerRef}
+          onScroll={onScroll}
+          data-testid="experiments-run-log"
+          className="max-h-72 overflow-y-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-foreground"
+        >
+          {logs.length === 0 ? (
+            <p className="text-muted-foreground">Waiting for first log line…</p>
+          ) : (
+            logs.map((line, idx) => (
+              <div
+                key={idx}
+                className={
+                  line.trim().startsWith('Training:') || line.trim().startsWith('Evaluating:')
+                    ? 'text-foreground font-semibold'
+                    : 'text-muted-foreground'
+                }
+              >
+                {line || '\u00A0'}
+              </div>
+            ))
+          )}
+        </div>
       </CardContent>
     </Card>
   );

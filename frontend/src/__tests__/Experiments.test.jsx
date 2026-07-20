@@ -9,6 +9,7 @@ vi.mock('@/api', () => ({
   api: {
     getExperimentResults: vi.fn(),
     runExperiments: vi.fn(),
+    runExperimentsStream: vi.fn(),
   },
 }));
 
@@ -16,6 +17,28 @@ function renderExperiments() {
   return render(
     <MemoryRouter><Experiments /></MemoryRouter>,
   );
+}
+
+/**
+ * Fake SSE that the streaming test can drive directly. Records the
+ * callbacks the page subscribes with so each test can emit log /
+ * status / metric / done events synchronously and assert that the UI
+ * reacted to them.
+ */
+function makeFakeStream() {
+  const handlers = {};
+  const close = vi.fn();
+  api.runExperimentsStream.mockImplementation((opts = {}) => {
+    Object.assign(handlers, {
+      onStatus: opts.onStatus,
+      onLog: opts.onLog,
+      onMetric: opts.onMetric,
+      onDone: opts.onDone,
+      onError: opts.onError,
+    });
+    return close;
+  });
+  return { handlers, close };
 }
 
 beforeEach(() => {
@@ -133,10 +156,106 @@ describe('Experiments page', () => {
     await waitFor(() => screen.getByTestId('experiments-row-xgb'));
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent.trim());
     expect(headers).toContain('Model');
-    expect(headers).toContain('accuracy');
     expect(headers).toContain('precision');
     expect(headers).toContain('recall');
     expect(headers).toContain('f1');
     expect(headers).toContain('auc_roc');
+  });
+});
+
+describe('Experiments page — streaming run', () => {
+  it('opens an SSE stream and renders log lines as they arrive', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers, close } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    // Drive the fake stream: status → log → log → done.
+    handlers.onStatus?.({ stage: 'loading' });
+    handlers.onStatus?.({ stage: 'running', samples: 751 });
+    handlers.onLog?.('Running experiments on 751 samples...');
+    handlers.onLog?.('  Training: XGBoost (Baseline 2)...');
+    handlers.onLog?.('    F1: 0.7979');
+    handlers.onDone?.({ best_model: 'xgb', results: {
+      best_model: 'xgb',
+      model_comparison: {
+        xgb: { accuracy: 0.88, precision: 0.9, recall: 0.99, f1: 0.94, auc_roc: 0.84 },
+      },
+    } });
+
+    // The progress card and the log lines should both be visible.
+    expect(await screen.findByTestId('experiments-run-progress')).toBeInTheDocument();
+    const log = await screen.findByTestId('experiments-run-log');
+    expect(log.textContent).toContain('Running experiments on 751 samples');
+    expect(log.textContent).toContain('Training: XGBoost (Baseline 2)');
+    expect(log.textContent).toContain('F1: 0.7979');
+    // The stream's close() must be called when done fires.
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('updates the model_comparison rows live as metric events arrive', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onMetric?.({ model: 'rule', accuracy: 0.7, f1: 0.78 });
+    // The rule row should appear in the table as soon as its metric
+    // event arrives — even before the run finishes.
+    await waitFor(() => {
+      const row = screen.getByTestId('experiments-row-rule');
+      expect(row).toBeInTheDocument();
+    });
+    handlers.onMetric?.({ model: 'xgb', accuracy: 0.9, f1: 0.94 });
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-row-xgb')).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces stream errors in the error card and stops the spinner', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onError?.('No labels in database');
+
+    // The error card carries the message; once onError fires the
+    // running state is cleared so the Run button is re-enabled.
+    expect(await screen.findByText(/No labels in database/)).toBeInTheDocument();
+    const runBtn = screen.getByTestId('experiments-run');
+    expect(runBtn).not.toBeDisabled();
+  });
+
+  it('shows a Cancel button while running that closes the stream', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers, close } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+    handlers.onStatus?.({ stage: 'running' });
+
+    // While running, the button becomes Cancel.
+    const cancelBtn = await screen.findByTestId('experiments-cancel');
+    await user.click(cancelBtn);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('passes log lines to the log panel verbatim (no transformation)', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onLog?.('  Best model: xgb (F1: 0.9400)');
+    const log = await screen.findByTestId('experiments-run-log');
+    expect(log.textContent).toContain('Best model: xgb');
   });
 });

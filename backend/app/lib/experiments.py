@@ -151,6 +151,7 @@ def run_full_experiment_suite(
     y_arr: np.ndarray,
     label_dates: Sequence[date] | None = None,
     label_site_keys: Sequence[str] | None = None,
+    progress_callback=None,
 ) -> dict:
     """
     Run the complete experiment suite:
@@ -164,13 +165,37 @@ def run_full_experiment_suite(
     When ``label_dates`` is provided, the split is time-aware (see
     :func:`_time_aware_split`). Otherwise the legacy random stratified
     split is used so unit tests that fabricate indices stay deterministic.
+
+    ``progress_callback`` is an optional ``callable(str) -> None`` invoked
+    with one human-readable line per step. The streaming endpoint at
+    ``/api/v1/experiments/run/stream`` supplies a callback that forwards
+    each line to the browser as an SSE ``log`` event, so the operator
+    watching the UI sees the same progress that was previously only
+    visible in the server console. ``print`` is always kept for
+    back-compat (so CLI / direct-script users still see the output).
     """
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _log(message: str) -> None:
+        """Forward one step to the UI listener and also to stdout.
+
+        Centralised so every step in the suite emits a single, identical
+        line in both channels. Exceptions inside the callback must not
+        break the run — wrap the call so a flaky UI subscriber can't
+        crash the training pipeline.
+        """
+        print(message)
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(message)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("progress_callback raised: %s", exc)
 
     n_total = len(X_flat)
     n_real = int((y >= 0).sum())  # all are valid labels
 
-    print(f"Running experiments on {n_total} samples...")
+    _log(f"Running experiments on {n_total} samples...")
 
     # ── 1. Split data ──────────────────────────────────────────────────
     if label_dates is not None and len(label_dates) == n_total:
@@ -237,48 +262,48 @@ def run_full_experiment_suite(
             list(label_site_keys), test_idx,
         )
 
-    print(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
+    _log(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
 
     # ── 2. Train and evaluate models ───────────────────────────────────
     model_results = {}
 
     # Baseline 1: Rule-based
-    print("\n  Evaluating: Rule-based (Baseline 1)...")
+    _log("\n  Evaluating: Rule-based (Baseline 1)...")
     rule_metrics = _evaluate_rule_based(X_test_f, y_test)
     model_results["rule"] = rule_metrics
-    print(f"    F1: {rule_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {rule_metrics.get('f1', 'N/A'):.4f}")
 
     # Baseline 2: XGBoost
-    print("  Training: XGBoost (Baseline 2)...")
+    _log("  Training: XGBoost (Baseline 2)...")
     xgb_metrics = _train_and_evaluate_xgb(X_train_f, y_train, X_test_f, y_test)
     model_results["xgb"] = xgb_metrics
-    print(f"    F1: {xgb_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {xgb_metrics.get('f1', 'N/A'):.4f}")
 
     # Primary: LSTM
-    print("  Training: LSTM (Primary)...")
+    _log("  Training: LSTM (Primary)...")
     lstm_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="lstm",
     )
     model_results["lstm"] = lstm_metrics
-    print(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
 
     # Ablation: GRU
-    print("  Training: GRU (Ablation)...")
+    _log("  Training: GRU (Ablation)...")
     gru_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="gru",
     )
     model_results["gru"] = gru_metrics
-    print(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
 
     # ── 3. Ablation studies ────────────────────────────────────────────
-    print("\n  Running ablation studies...")
+    _log("\n  Running ablation studies...")
     ablations = _run_ablations(X_train_seq, y_train_arr, X_test_seq, y_test_arr)
 
     # ── 4. Find best model ─────────────────────────────────────────────
     best_model = max(model_results, key=lambda k: model_results[k].get("f1", 0))
 
     # ── 5. Generate plots ──────────────────────────────────────────────
-    print("  Generating plots...")
+    _log("  Generating plots...")
     _generate_plots(model_results, ablations)
 
     # ── 6. Assemble results ────────────────────────────────────────────
@@ -293,8 +318,8 @@ def run_full_experiment_suite(
     with open(RESULTS_PATH, "w") as f:
         json.dump(results, f, indent=2, default=str)
 
-    print(f"\n  Results saved to {RESULTS_PATH}")
-    print(f"  Best model: {best_model} (F1: {model_results[best_model].get('f1', 'N/A'):.4f})")
+    _log(f"\n  Results saved to {RESULTS_PATH}")
+    _log(f"  Best model: {best_model} (F1: {model_results[best_model].get('f1', 'N/A'):.4f})")
 
     return results
 
