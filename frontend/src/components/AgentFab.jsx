@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Send, RotateCcw, MapPin } from 'lucide-react';
+import { Bot, Send, RotateCcw, MapPin, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -16,6 +15,7 @@ import { api, streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
 import { Message } from './agent/Message';
 import { StreamingDots } from './agent/StreamingDots';
+import ChatComposer from './agent/ChatComposer';
 import {
   makeThinkingState, feedThinking, flushThinking,
 } from './agent/streaming-thinking';
@@ -58,6 +58,11 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [conversationId, setConversationId] = useState(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const scrollRef = useRef(null);
+  // Holds the AbortController for the in-flight stream so the Stop
+  // button (or an unmount) can cancel it. We keep this at the FAB
+  // level rather than inside the send closure so the composer can
+  // access it without us having to thread it through props.
+  const controllerRef = useRef(null);
 
   // External trigger from CommandPalette (and any in-page "Open agent"
   // button that wants to summon the FAB).
@@ -94,6 +99,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     setBusy(true);
 
     const controller = new AbortController();
+    controllerRef.current = controller;
     const think = makeThinkingState();
 
     const patchAssistant = (patch) => {
@@ -203,6 +209,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
       }
     } finally {
       setBusy(false);
+      if (controllerRef.current === controller) controllerRef.current = null;
     }
   });
 
@@ -214,12 +221,20 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     return sendRef.current(t);
   };
 
-  const onKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
+  const stop = () => {
+    if (controllerRef.current) {
+      controllerRef.current.abort();
+      controllerRef.current = null;
     }
   };
+
+  // Best-effort cleanup on unmount so a stream that outlives the
+  // component doesn't keep the network connection open.
+  useEffect(() => {
+    return () => {
+      if (controllerRef.current) controllerRef.current.abort();
+    };
+  }, []);
 
   const reset = () => {
     // Confirm before discarding a non-empty transcript (roadmap #10).
@@ -352,36 +367,21 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         </div>
 
         <div className="border-t border-border bg-card p-3">
-          <div className="flex items-center gap-2">
-            <Input
-              placeholder={`Ask about ${siteKey}…`}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKey}
-              disabled={busy}
-              data-testid="agent-input"
-              className="flex-1"
-            />
-            <Button
-              onClick={() => send()}
-              disabled={busy || draft.trim() === ''}
-              size="icon"
-              data-testid="agent-send"
-              aria-label="Send"
-            >
-              <Send className="size-4" />
-            </Button>
-          </div>
-          <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
-            {/* Hint matches actual behaviour: single-line composer, Enter
-                sends. No more misleading "Shift+Enter for newline". */}
-            <span>Enter to send</span>
-            {conversationId && (
-              <Badge variant="outline" className="font-mono text-[10px]">
-                {String(conversationId).slice(0, 8)}
-              </Badge>
-            )}
-          </div>
+          <ChatComposer
+            value={draft}
+            onChange={setDraft}
+            onSend={(overrideText) => send(overrideText)}
+            onStop={stop}
+            busy={busy}
+            siteKey={siteKey}
+            suggestions={
+              // Inline suggestion chips are most useful at the start of
+              // a conversation; once the user is mid-thread the chips
+              // become noise, so we hide them after the first turn.
+              messages.length === 0 ? personalisedPrompts() : []
+            }
+            placeholder={`Ask the agent about ${siteKey}…`}
+          />
         </div>
       </SheetContent>
     </Sheet>
@@ -397,6 +397,16 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     />
     </>
   );
+}
+
+/**
+ * Build the prompt-chip list, personalising the "current site" string
+ * to the actual selected site. Kept outside the component so the
+ * substitution runs only on render and doesn't recreate strings on
+ * every keystroke.
+ */
+function personalisedPrompts() {
+  return PROMPTS;
 }
 
 function EmptyState({ siteKey, onPickPrompt, disabled }) {

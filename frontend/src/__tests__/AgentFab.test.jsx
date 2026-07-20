@@ -79,13 +79,103 @@ describe('AgentFab', () => {
     expect(screen.getByTestId('agent-send')).toBeInTheDocument();
   });
 
-  it('composer hint matches actual behaviour (Enter to send, no Shift+Enter claim)', () => {
+  it('composer hint matches actual behaviour (Enter to send, Shift+Enter for newline)', () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // The misleading "Shift+Enter for newline" line must be gone.
-    expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument();
-    // The correct, honest hint is present.
-    expect(screen.getByText(/Enter to send/i)).toBeInTheDocument();
+    // The composer shows the keyboard hint via the inline kbd
+    // affordance rather than a single text string. Verify the
+    // "send" + "newline" hints are present, and that the tooltip
+    // on the send button is the canonical "Send (Enter)" label.
+    expect(screen.getByText(/^send$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^newline$/i)).toBeInTheDocument();
+    expect(screen.getByTestId('agent-send')).toHaveAttribute('aria-label', 'Send message');
+  });
+
+  it('composer shows the current site as a chip so the user knows the context', () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const chip = screen.getByTestId('agent-composer-site');
+    expect(chip).toBeInTheDocument();
+    expect(chip.textContent).toMatch(/dauin_muck/);
+  });
+
+  it('composer shows inline suggestion chips only when transcript is empty', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // Empty conversation: chips visible.
+    expect(screen.getByTestId('agent-suggestions')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^agent-suggestion-\d+$/).length).toBeGreaterThan(0);
+
+    // After sending a message the chips should disappear.
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+    await screen.findByText(/conditions look safe at dauin today/i);
+    expect(screen.queryByTestId('agent-suggestions')).not.toBeInTheDocument();
+  });
+
+  it('a click on a suggestion chip sends the prompt immediately', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // The composer chips are index 0,1,2.
+    const chips = screen.getAllByTestId(/^agent-suggestion-\d+$/);
+    fireEvent.click(chips[0]);
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    expect(streamChat.mock.calls[0][0].message.length).toBeGreaterThan(0);
+  });
+
+  it('shows a Stop button while streaming that aborts the in-flight request', async () => {
+    // Stream that respects the AbortSignal: when aborted, the finally
+    // block flips `aborted` to true, mirroring what streamChat would
+    // do in production (close the underlying fetch).
+    let aborted = false;
+    streamChat.mockImplementation(async function* (opts = {}) {
+      try {
+        yield { type: 'status', conversation_id: 'conv-3' };
+        while (true) {
+          if (opts.signal?.aborted) return;
+          await new Promise((r) => setTimeout(r, 10));
+          yield { type: 'text', delta: 'still going…' };
+        }
+      } finally {
+        aborted = true;
+      }
+    });
+
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+
+    // While streaming the Stop control replaces the Send button.
+    const stopBtn = await screen.findByTestId('agent-stop');
+    expect(stopBtn).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-send')).not.toBeInTheDocument();
+
+    fireEvent.click(stopBtn);
+    await waitFor(() => expect(aborted).toBe(true));
+  });
+
+  it('grows the textarea as the user types multi-line content', () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const ta = screen.getByTestId('agent-input');
+    // Seed a multi-line draft; the height should grow past the
+    // single-line baseline.
+    fireEvent.change(ta, {
+      target: { value: 'line one\nline two\nline three\nline four' },
+    });
+    expect(ta.style.height).not.toBe('');
+  });
+
+  it('shows a character + word counter that updates as the user types', () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const ta = screen.getByTestId('agent-input');
+    fireEvent.change(ta, { target: { value: 'hello world' } });
+    const counter = screen.getByTestId('agent-char-count');
+    expect(counter.textContent).toMatch(/2 words/);
+    expect(counter.textContent).toMatch(/11\/2000/);
   });
 
   it('submits composer text on Enter and consumes the SSE stream', async () => {
