@@ -12,6 +12,20 @@ const METRICS = ['accuracy', 'precision', 'recall', 'f1', 'auc_roc'];
 const fmt = (v) => (v == null ? '—' : Number(v).toFixed(3));
 
 /**
+ * Detect "no usable results yet" — an empty object, null, undefined, or
+ * a payload that has no model entries under any of the supported keys.
+ * Used to switch between the empty-state card and the populated table.
+ */
+function isEmptyResults(results) {
+  if (!results) return true;
+  if (Array.isArray(results)) return results.length === 0;
+  if (results.models) return !Array.isArray(results.models) || results.models.length === 0;
+  if (results.by_model) return Object.keys(results.by_model).length === 0;
+  if (results.model_comparison) return Object.keys(results.model_comparison).length === 0;
+  return true;
+}
+
+/**
  * Experiments — runs the model-compare suite + ablation suite and
  * surfaces metric tables per model.
  *
@@ -107,7 +121,7 @@ export default function Experiments() {
 
       {loading && !results ? (
         <SkeletonChart />
-      ) : !results ? (
+      ) : !results || isEmptyResults(results) ? (
         <EmptyResults onRun={run} running={running} />
       ) : (
         <ResultsCard results={results} />
@@ -142,9 +156,11 @@ function EmptyResults({ onRun, running }) {
 function ResultsCard({ results }) {
   // `results` may be:
   //   { by_model: { lstm: {metric: value}, xgboost: {...}, gru, rule_based }, ... }
-  //   or
   //   { models: [...] }
-  // We gracefully handle both.
+  //   { model_comparison: { rule, xgb, lstm, gru } }  ← SeaSID's actual shape
+  //   or a bare array of rows.
+  // We gracefully handle all four so the page keeps working when the
+  // backend renames fields.
   let rows = [];
   if (Array.isArray(results.models)) {
     rows = results.models.map((m) => ({ name: m.name, ...m.metrics }));
@@ -153,6 +169,25 @@ function ResultsCard({ results }) {
       name,
       ...(metrics || {}),
     }));
+  } else if (results.model_comparison) {
+    // The backend's /api/v1/experiments/results returns the comparison
+    // under `model_comparison` with short keys ("xgb", "lstm", "rule",
+    // "gru"). Surface the value the user actually wants to read — the
+    // held-out test-set metrics — and fall back to the CV metrics
+    // inside `train_metrics` if a model is missing top-level fields
+    // (e.g. a freshly-retrained LSTM before its eval pass completes).
+    rows = Object.entries(results.model_comparison).map(([name, metrics]) => {
+      const m = metrics || {};
+      const cv = m.train_metrics || {};
+      return {
+        name,
+        accuracy: m.accuracy ?? cv.cv_accuracy,
+        precision: m.precision ?? cv.cv_precision,
+        recall: m.recall ?? cv.cv_recall,
+        f1: m.f1 ?? cv.cv_f1,
+        auc_roc: m.auc_roc ?? cv.auc_roc,
+      };
+    });
   } else if (Array.isArray(results)) {
     rows = results;
   }
@@ -166,6 +201,11 @@ function ResultsCard({ results }) {
         </div>
         <CardDescription>
           Each row is a model; each column a metric from LeaveOneOut cross-validation.
+          {results.best_model && (
+            <>
+              {' '}Current best: <span className="font-mono text-foreground">{results.best_model}</span>.
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -188,20 +228,37 @@ function ResultsCard({ results }) {
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((r) => (
-                <TableRow key={r.name}>
-                  <TableCell>
-                    <Badge variant="secondary" className="font-mono text-[10px]">
-                      {r.name}
-                    </Badge>
-                  </TableCell>
-                  {METRICS.map((m) => (
-                    <TableCell key={m} className="font-mono tabular-nums">
-                      {fmt(r[m])}
+              rows.map((r) => {
+                const isBest = results.best_model && r.name === results.best_model;
+                return (
+                  <TableRow
+                    key={r.name}
+                    data-testid={`experiments-row-${r.name}`}
+                    className={isBest ? 'bg-reef/5' : undefined}
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={isBest ? 'default' : 'secondary'}
+                          className="font-mono text-[10px]"
+                        >
+                          {r.name}
+                        </Badge>
+                        {isBest && (
+                          <span className="text-[10px] uppercase tracking-wider text-reef">
+                            best
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
-                  ))}
-                </TableRow>
-              ))
+                    {METRICS.map((m) => (
+                      <TableCell key={m} className="font-mono tabular-nums">
+                        {fmt(r[m])}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
