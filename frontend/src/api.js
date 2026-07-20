@@ -182,30 +182,83 @@ export const api = {
   // `done`, `error`). Returns a `close()` function so the UI can abort
   // mid-run (e.g. on tab navigation).
   runExperimentsStream: ({ onStatus, onLog, onMetric, onDone, onError, signal } = {}) => {
+    // We POST instead of using EventSource because the browser's
+    // built-in EventSource is GET-only, and the experiment suite is a
+    // state-changing write (reloads the active model, invalidates the
+    // forecast cache). Reusing the same fetch+ReadableStream pattern
+    // the agent chat stream already uses keeps the wire format
+    // (newline-delimited `data: {json}` SSE frames) identical to the
+    // backend's StreamingResponse.
     const url = `${API_BASE}/api/v1/experiments/run/stream`;
-    const es = new EventSource(url, { withCredentials: false });
-    es.onmessage = (e) => {
-      let payload;
-      try { payload = JSON.parse(e.data); } catch { return; }
-      switch (payload.type) {
-        case 'status':   onStatus?.(payload); break;
-        case 'log':      onLog?.(payload.line || ''); break;
-        case 'metric':   onMetric?.(payload); break;
-        case 'done':     onDone?.(payload); break;
-        case 'error':    onError?.(payload.message || 'Experiment failed'); break;
-        default: break;
-      }
-    };
-    es.onerror = () => {
-      onError?.('Lost connection to experiment stream');
-      es.close();
-    };
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
     if (signal) {
-      const abort = () => es.close();
-      if (signal.aborted) es.close();
-      else signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', onAbort, { once: true });
     }
-    return () => es.close();
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      controller.abort();
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
+    (async () => {
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          onError?.(`Lost connection to experiment stream: ${err.message || err}`);
+        }
+        return;
+      }
+      if (!res.ok || !res.body) {
+        onError?.(`Experiment stream failed: HTTP ${res.status}`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE frames are terminated by a blank line (\n\n).
+          let sep;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            for (const raw of frame.split('\n')) {
+              if (!raw.startsWith('data: ')) continue;
+              const data = raw.slice(6);
+              let payload;
+              try { payload = JSON.parse(data); } catch { continue; }
+              switch (payload.type) {
+                case 'status':   onStatus?.(payload); break;
+                case 'log':      onLog?.(payload.line || ''); break;
+                case 'metric':   onMetric?.(payload); break;
+                case 'done':     onDone?.(payload); break;
+                case 'error':    onError?.(payload.message || 'Experiment failed'); break;
+                default: break;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          onError?.(`Stream interrupted: ${err.message || err}`);
+        }
+      }
+    })();
+
+    return close;
   },
 
   // Active learning (Phase 8) — past dates where operator confirmation
