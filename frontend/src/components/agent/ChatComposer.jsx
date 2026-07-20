@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   Send,
   Square,
@@ -41,8 +41,20 @@ import { cn } from '@/lib/utils';
  *                  input. Empty array hides the suggestion row.
  *   placeholder:  string — placeholder for the textarea
  *   maxRows:     number — soft cap on auto-growth (default 6)
+ *
+ * Imperative handle (ref.current):
+ *   .focus()      — moves keyboard focus into the textarea and places
+ *                   the caret at the end. Used by AgentFab to:
+ *                     1. autofocus when the sheet opens
+ *                     2. refocus after the stream finishes so the
+ *                        operator can type the follow-up without
+ *                        clicking back into the field
+ *                     3. refocus after Reset / chip-selection
+ *                   Safe to call when the textarea is disabled
+ *                   (busy); the call is queued via a microtask so
+ *                   it lands as soon as `busy` flips back to false.
  */
-export default function ChatComposer({
+const ChatComposer = forwardRef(function ChatComposer({
   value,
   onChange,
   onSend,
@@ -52,7 +64,8 @@ export default function ChatComposer({
   suggestions = [],
   placeholder = 'Ask the agent…',
   maxRows = 6,
-}) {
+}, ref) {
+
   const taRef = useRef(null);
   const [isFocused, setIsFocused] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -82,6 +95,36 @@ export default function ChatComposer({
       el.setSelectionRange(len, len);
     }
   }, [value]);
+
+  /**
+   * Imperative focus handle — lets AgentFab pull the caret back into
+   * the textarea without having to thread a ref through every layer.
+   * The implementation defers via queueMicrotask when busy is true
+   * so a `focus()` call right after `setBusy(false)` lands as soon
+   * as the textarea is re-enabled.
+   */
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      const el = taRef.current;
+      if (!el) return;
+      if (el.disabled) {
+        // Busy: try again on the next microtask when React has
+        // flipped the disabled flag back to false.
+        queueMicrotask(() => {
+          const inner = taRef.current;
+          if (inner && !inner.disabled) {
+            inner.focus();
+            const len = inner.value.length;
+            inner.setSelectionRange(len, len);
+          }
+        });
+        return;
+      }
+      el.focus();
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    },
+  }), []);
 
   const canSend = value.trim().length > 0 && !busy;
 
@@ -289,4 +332,6 @@ export default function ChatComposer({
       </div>
     </div>
   );
-}
+});
+
+export default ChatComposer;

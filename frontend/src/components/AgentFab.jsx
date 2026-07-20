@@ -63,6 +63,11 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   // level rather than inside the send closure so the composer can
   // access it without us having to thread it through props.
   const controllerRef = useRef(null);
+  // Composer ref so we can pull focus into the textarea when the
+  // sheet opens, when a stream finishes, or after a reset — without
+  // the operator having to click back into the field to type the
+  // follow-up. See ChatComposer.forwardRef.
+  const composerRef = useRef(null);
 
   // External trigger from CommandPalette (and any in-page "Open agent"
   // button that wants to summon the FAB).
@@ -71,6 +76,19 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     window.addEventListener('seasid:open-agent', handler);
     return () => window.removeEventListener('seasid:open-agent', handler);
   }, []);
+
+  // Auto-focus the textarea whenever the sheet opens or the FAB mounts.
+  // The Sheet mounts the composer lazily on first open, so we can't
+  // just call .focus() at FAB mount time — the composer ref doesn't
+  // exist yet. Watching `open` and deferring to the next frame gives
+  // Radix time to mount the SheetContent + composer before we focus.
+  useEffect(() => {
+    if (!open) return;
+    const id = window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open]);
 
   // Auto-scroll transcript on new content
   useEffect(() => {
@@ -210,6 +228,12 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     } finally {
       setBusy(false);
       if (controllerRef.current === controller) controllerRef.current = null;
+      // Pull focus back into the textarea so the operator can type
+      // the follow-up without clicking. The composer's focus() queues
+      // a microtask if the textarea is still disabled from the
+      // previous render, so this works whether React has committed
+      // the disabled=false yet or not.
+      composerRef.current?.focus();
     }
   });
 
@@ -252,6 +276,10 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     setMessages([]);
     setConversationId(null);
     setResetDialogOpen(false);
+    // Refocus so the operator can immediately start a fresh thread.
+    // The requestAnimationFrame defers until Radix has closed the
+    // confirm dialog and the textarea is back in the DOM focus order.
+    window.requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   return (
@@ -368,6 +396,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
 
         <div className="border-t border-border bg-card p-3">
           <ChatComposer
+            ref={composerRef}
             value={draft}
             onChange={setDraft}
             onSend={(overrideText) => send(overrideText)}

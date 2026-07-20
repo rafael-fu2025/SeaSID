@@ -178,6 +178,57 @@ describe('AgentFab', () => {
     expect(counter.textContent).toMatch(/11\/2000/);
   });
 
+  it('auto-focuses the textarea when the sheet opens', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // The composer mounts lazily with the Sheet. After one rAF the
+    // imperative focus() call from AgentFab has landed and the
+    // textarea is the active element.
+    await waitFor(() => {
+      const ta = screen.getByTestId('agent-input');
+      expect(document.activeElement).toBe(ta);
+    });
+  });
+
+  it('refocuses the textarea when the agent response finishes', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // The textarea is focused on open. Blur it to simulate the user
+    // clicking on the transcript while the response is streaming.
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+
+    // Wait for the reply to render.
+    await screen.findByText(/conditions look safe at dauin today/i);
+
+    // The composer should have pulled focus back. Use a short wait
+    // because the refocus runs in the finally block after state has
+    // committed, which happens a microtask or two after the text
+    // appears.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('agent-input'));
+    });
+  });
+
+  it('refocuses the textarea after a Reset', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // Send something so the transcript is non-empty (Reset dialog
+    // only opens in that case).
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+    await screen.findByText(/conditions look safe at dauin today/i);
+
+    // Open + confirm Reset.
+    fireEvent.click(screen.getByTestId('agent-reset'));
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('agent-input'));
+    });
+  });
+
   it('submits composer text on Enter and consumes the SSE stream', async () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
