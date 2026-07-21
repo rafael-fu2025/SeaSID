@@ -2,14 +2,12 @@
 Test fixtures for SeaSID backend tests.
 """
 
-import asyncio
 import gc
 import os
 import socket as _socket
 import sys
-import tempfile
 import time
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -78,7 +76,7 @@ if sys.platform == "win32":
         _ProactorCls._close_self_pipe = _safe_close_self_pipe
 
 
-from app.lib.db import Base, engine, SessionLocal, WeatherObs, TideObs, NoDiveLabel, init_db
+from app.lib.db import Base, WeatherObs, TideObs
 from app.lib.features import FEATURE_COLUMNS
 
 

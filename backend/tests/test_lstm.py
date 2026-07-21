@@ -21,8 +21,6 @@ from app.lib.model_lstm import (
     load_lstm,
     predict_proba_lstm,
     LSTMTrainConfig,
-    LSTMPredictor,
-    GRUPredictor,
 )
 from app.lib.features import FEATURE_COLUMNS
 

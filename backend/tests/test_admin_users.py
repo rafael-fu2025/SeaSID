@@ -8,7 +8,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.api.main import app
-from app.lib import db
 
 
 def _users_admin(*, role="admin", site_keys=None):

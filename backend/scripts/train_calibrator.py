@@ -84,7 +84,6 @@ def _lstm_p(holdout):
     from app.lib.model_lstm import (
         LSTMTrainConfig, train_lstm, predict_proba_lstm_batch,
     )
-    import pandas as pd
 
     init_db()
     sess = SessionLocal()

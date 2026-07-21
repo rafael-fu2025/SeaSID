@@ -20,7 +20,7 @@ from app.lib.providers.base import (
     ProviderInfo,
     WeatherProvider,
 )
-from app.lib.weather import fetch_forecast, fetch_archive
+from app.lib.weather import fetch_forecast
 
 logger = logging.getLogger(__name__)
 

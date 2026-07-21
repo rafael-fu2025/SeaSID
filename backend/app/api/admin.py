@@ -15,21 +15,17 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.api.schemas import (
     ApiKeyCreate,
-    ApiKeyOut,
     ApiKeyUpdate,
     ProviderConfigUpdate,
     UserCreate,
-    UserOut,
     UserUpdate,
 )
 from app.auth import (
     Principal,
-    create_access_token,
     ensure_role,
     get_current_principal,
 )
 from app.lib.user_store import (
-    change_password as db_change_password,
     create_user,
     delete_user,
     get_user_by_username,

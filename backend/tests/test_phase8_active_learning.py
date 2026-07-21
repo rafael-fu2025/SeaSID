@@ -65,7 +65,7 @@ def test_suggest_active_labels_returns_list_of_dicts():
     from sqlalchemy.orm import sessionmaker
     import tempfile
     import numpy as np
-    from app.lib.db import Base, WeatherObs, TideObs, init_db
+    from app.lib.db import Base, WeatherObs, TideObs
     from app.lib import db as db_mod
     from app.lib.active_learning import suggest_active_labels
 
@@ -303,11 +303,13 @@ def _isolated_db_with_module_patch():
     TestSession = sessionmaker(bind=engine)
     cm = mock.patch.object(db_mod, "SessionLocal", TestSession)
     cm2 = mock.patch.object(db_mod, "engine", engine)
-    cm.start(); cm2.start()
+    cm.start()
+    cm2.start()
     try:
         yield engine, TestSession
     finally:
-        cm.stop(); cm2.stop()
+        cm.stop()
+        cm2.stop()
         engine.dispose()
 
 

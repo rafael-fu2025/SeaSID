@@ -10,7 +10,7 @@ Usage:
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +22,6 @@ from app.lib import db as _db_mod
 from app.lib.db import init_db
 from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
 from app.lib.scoring import label_to_binary
-from app.lib.sites import get_all_sites
 
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -78,7 +77,7 @@ def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarr
             y_vals.append(label_to_binary(lbl.label))
             # Phase 2: capture the date so train_lstm can do a time-aware split.
             label_dates.append(lbl.date)
-        except Exception as exc:
+        except Exception:
             skipped += 1
             continue
 

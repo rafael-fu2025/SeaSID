@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -31,13 +31,11 @@ def fetch_tides(lat: float, lon: float, length_seconds: int = 86400) -> list[dic
     Returns empty list if API key is missing or request fails.
     """
     api_key = ""
-    key_id = 0
     try:
         from app.lib import provider_keys as _pk
         key_record = _pk.resolve_provider_value("tides")
         if key_record is not None:
             api_key = key_record.value
-            key_id = key_record.id
     except Exception:
         pass
     if not api_key:

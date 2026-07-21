@@ -46,6 +46,7 @@ backend/data/pagasa_seed_live.csv
 
 # Agent / IDE metadata
 .mimicode/
+.qoder/
 
 # ── Node / Frontend ───────────────────────────────────────────────────────
 node_modules/

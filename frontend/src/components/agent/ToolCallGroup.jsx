@@ -15,12 +15,13 @@ import { ToolCallRow } from './ToolCallRow';
  * can read what's currently happening even when the list is collapsed.
  */
 export function ToolCallGroup({ calls }) {
+  const [open, setOpen] = useState(false);
+
   if (!calls || calls.length === 0) return null;
   if (calls.length === 1) {
     return <ToolCallRow call={calls[0]} />;
   }
 
-  const [open, setOpen] = useState(false);
   const latest = calls[calls.length - 1];
   const latestName = latest.name ?? 'unknown';
 

@@ -16,8 +16,8 @@ from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
 from app.lib import db
-from app.lib.features import build_features, FEATURE_COLUMNS
-from app.lib.scoring import score_hour, risk_label, features_dict_from_row
+from app.lib.features import build_features
+from app.lib.scoring import features_dict_from_row
 from app.lib.sites import get_all_sites
 
 logger = logging.getLogger(__name__)

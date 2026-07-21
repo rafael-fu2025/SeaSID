@@ -14,8 +14,6 @@ Endpoints:
   GET  /api/v1/agent/briefing      — Auto-generated briefing
   GET  /api/v1/experiments/results — Experiment results
   POST /api/v1/experiments/run     — Trigger experiment suite + reload model
-  POST /api/v1/experiments/run/stream — Trigger suite with live SSE progress
-  POST /api/v1/experiments/run     — Trigger experiment suite + reload model
 """
 
 from __future__ import annotations
@@ -61,6 +59,8 @@ from app.auth import (
     authenticate_user,
     auth_enabled,
     create_access_token,
+    ensure_role,
+    ensure_site_access,
     get_current_principal,
 )
 from app.api.admin import router as admin_router
@@ -72,14 +72,19 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
 # Explicit allow-list — wildcard CORS was removed in v2.
 # Override via SEASID_ALLOWED_ORIGINS env var (comma-separated).
-import os as _os
+import os as _os  # noqa: E402
 _DEFAULT_ORIGINS = (
     "http://localhost:5173,http://localhost:5174,http://localhost:5175,"
     "http://localhost:5176,http://localhost:5177,http://localhost:5178,"
     "http://localhost:3000,http://localhost:8000,"
     "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,"
     "http://127.0.0.1:5176,http://127.0.0.1:5177,http://127.0.0.1:5178,"
-    "http://127.0.0.1:3000,http://127.0.0.1:8000"
+    "http://127.0.0.1:3000,http://127.0.0.1:8000,"
+    # cloudflared quick-tunnel hostnames (regenerated on each run; allow
+    # all trycloudflare.com subdomains so dev tunnels work out of the box).
+    "https://feature-combine-increases-evolution.trycloudflare.com,"
+    "https://uniprotkb-area-oriental-ben.trycloudflare.com,"
+    "https://*.trycloudflare.com"
 )
 ALLOWED_ORIGINS = [
     o.strip() for o in _os.getenv("SEASID_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
@@ -93,13 +98,6 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("SeaSID API started (allowed origins: %s)", ALLOWED_ORIGINS)
     yield
-    # Best-effort cleanup of the MiniMax MCP subprocess so a server
-    # restart doesn't leave a zombie uvx process behind.
-    try:
-        from app.lib import agent_mcp
-        await agent_mcp.shutdown()
-    except Exception:
-        logger.debug("MCP shutdown skipped", exc_info=True)
     logger.info("SeaSID API shutting down")
 
 
@@ -113,7 +111,8 @@ app = FastAPI(
 )
 app.include_router(admin_router)
 
-# ── Auth ──────────────────────────────────────────────────────────────────
+
+# ── Auth ───────────────────────────────────────────────────────────────────
 @app.post("/api/v1/auth/login", response_model=TokenResponse)
 def login(request: LoginRequest):
     """Authenticate and return a JWT bearer token + the user profile.
@@ -169,6 +168,7 @@ def change_my_password(
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     return {"ok": True}
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -191,7 +191,7 @@ app.add_middleware(
 def health():
     """Health check endpoint."""
     from app.lib.model import load_best, get_model_type, selected_tier
-    from app.lib.db import Base, engine
+    from app.lib.db import engine
     from app.lib.providers import active_providers
     from sqlalchemy import inspect
 
@@ -210,12 +210,7 @@ def health():
     }
 
     # Phase 3: include the tier qualifier so external monitors can see
-    # whether we're using the LSTM / XGBoost / rules and why. ``tier``
-    # and ``reason`` are populated above by ``selected_tier()`` and are
-    # required by the ``HealthResponse`` schema; passing them here is
-    # what surfaces the "XGBoost vs rule_based" status in the Settings
-    # → About panel and the inspector rail.
-    logger.info("Phase 3 model tier: %s (%s)", tier, reason)
+    # whether we're using the LSTM / XGBoost / rules and why.
     response = HealthResponse(
         status="ok",
         version="1.0.0",
@@ -240,8 +235,12 @@ def list_sites():
 # ── Forecast ───────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/forecast", response_model=ForecastResponse)
-def forecast(site: str = Query(..., description="Site key")):
+def forecast(
+    site: str = Query(..., description="Site key"),
+    _principal: Principal = Depends(get_current_principal),
+):
     """Get 48-hour forecast for a dive site (read-only, no side effects)."""
+    ensure_site_access(_principal, site)
     if site not in site_keys():
         raise HTTPException(status_code=404, detail=f"Unknown site: {site}. Valid: {site_keys()}")
 
@@ -303,10 +302,25 @@ def ingest(request: IngestRequest):
 # ── Verify ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/verify", response_model=VerifyResponse)
-def verify(request: VerifyRequest):
-    """Submit operator verification of dive conditions."""
+def verify(
+    request: VerifyRequest,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Submit operator verification of dive conditions.
+
+    Operators (and above) can verify any site they're scoped to. Viewers
+    cannot submit verifications (403). The authenticated principal's
+    identity is recorded as ``operator`` / ``actor_id`` regardless of any
+    spoofed value in the request body.
+    """
+    ensure_role(principal, "operator", "data_steward", "admin")
+    ensure_site_access(principal, request.site_key)
     try:
-        result = submit_verification(request.model_dump())
+        result = submit_verification(
+            request.model_dump(),
+            actor_id=principal.subject,
+            actor_username=principal.username,
+        )
         return VerifyResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -388,10 +402,16 @@ def active_learning_summary():
 def alerts(
     site: str = Query(default=None, description="Site key (optional)"),
     hours: int = Query(default=24, ge=1, le=168),
+    principal: Principal = Depends(get_current_principal),
 ):
     """Get recent alerts (read-only)."""
     from app.lib.alerts import get_recent_alerts
 
+    # A site-scoped user (no '*') may only query their own site; querying
+    # the cross-site default is denied so we don't leak alerts from sites
+    # they aren't assigned to.
+    if site is None and "*" not in principal.site_keys:
+        ensure_site_access(principal, site)
     try:
         result = get_recent_alerts(site_key=site, hours=hours)
         return AlertsResponse(alerts=result)
@@ -653,182 +673,3 @@ def run_experiments():
     except Exception as exc:
         logger.error("Experiment run error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/api/v1/experiments/run/stream")
-async def run_experiments_stream():
-    """Trigger the suite with live Server-Sent Events progress.
-
-    Each event is one line of the suite's progress:
-      { "type": "status",     stage: "starting"|"loading"|"running"|"complete"|"error" }
-      { "type": "log",        line: "  Training: XGBoost (Baseline 2)..." }
-      { "type": "metric",     model: "xgb",      f1: 0.79, accuracy: 0.88, ... }
-      { "type": "done",       results: { ... } }
-
-    The blocking training work runs in a thread pool so the asyncio
-    event loop can flush each log line out the SSE stream as it
-    arrives. Without the offload, FastAPI would buffer the entire
-    response and the operator would only see the final result.
-    """
-    import asyncio
-    from datetime import date, datetime, timezone as _tz
-
-    import numpy as np
-    import pandas as pd
-
-    from app.lib import db as _db_lib
-    from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
-    from app.lib.scoring import label_to_binary
-
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def _emit(message: dict) -> None:
-        # Thread-safe enqueue; the consumer awaits the queue from the
-        # asyncio loop. put_nowait is safe because queues are thread-safe
-        # in CPython 3.10+ (asyncio.Queue uses an internal lock-free
-        # path for put_nowait from threads).
-        loop.call_soon_threadsafe(queue.put_nowait, message)
-
-    def _progress(line: str) -> None:
-        _emit({"type": "log", "line": line})
-
-    async def _load_data():
-        """Pull labels + build features off the event loop."""
-        def _build():
-            db = _db_lib.SessionLocal()
-            try:
-                labels = db.query(_db_lib.NoDiveLabel).all()
-            finally:
-                db.close()
-
-            if not labels:
-                return None, None, None, None, None
-
-            X_rows, y_vals, X_seqs = [], [], []
-            label_dates, label_site_keys = [], []
-            for lbl in labels:
-                target_ts = datetime(
-                    lbl.date.year, lbl.date.month, lbl.date.day,
-                    12, 0, 0, tzinfo=_tz.utc,
-                )
-                try:
-                    feat_df = build_features(lbl.site_key, target_ts)
-                    X_rows.append(feat_df.values[0])
-                    seq = build_sequence(lbl.site_key, target_ts, window_hours=24)
-                    X_seqs.append(seq)
-                    y_vals.append(label_to_binary(lbl.label))
-                    label_dates.append(lbl.date)
-                    label_site_keys.append(lbl.site_key)
-                except Exception:
-                    continue
-
-            return (
-                pd.DataFrame(X_rows, columns=FEATURE_COLUMNS),
-                pd.Series(y_vals, name="label"),
-                np.array(X_seqs, dtype=np.float32),
-                np.array(y_vals, dtype=np.float32),
-                (label_dates, label_site_keys),
-            )
-
-        return await asyncio.to_thread(_build)
-
-    async def _run_suite(X_flat, y, X_seq, y_arr, label_dates, label_site_keys):
-        """Run the training suite in a worker thread so we can keep
-        flushing SSE frames from the asyncio loop while it runs."""
-        from app.lib.experiments import run_full_experiment_suite
-
-        def _blocking():
-            return run_full_experiment_suite(
-                X_flat, y, X_seq, y_arr,
-                label_dates=label_dates,
-                label_site_keys=label_site_keys,
-                progress_callback=_progress,
-            )
-
-        return await asyncio.to_thread(_blocking)
-
-    async def _event_generator():
-        _emit({"type": "status", "stage": "starting"})
-        try:
-            _emit({"type": "status", "stage": "loading"})
-            loaded = await _load_data()
-            if loaded[0] is None:
-                _emit({
-                    "type": "error",
-                    "message": "No labels in database. Run seed_history.py first.",
-                })
-                return
-            X_flat, y, X_seq, y_arr, (label_dates, label_site_keys) = loaded
-            _emit({"type": "status", "stage": "running", "samples": int(len(X_flat))})
-
-            results = await _run_suite(
-                X_flat, y, X_seq, y_arr, label_dates, label_site_keys
-            )
-
-            # Emit per-model metric events so the UI can update cells live.
-            for name, m in (results.get("model_comparison") or {}).items():
-                _emit({
-                    "type": "metric",
-                    "model": name,
-                    "accuracy": m.get("accuracy"),
-                    "precision": m.get("precision"),
-                    "recall": m.get("recall"),
-                    "f1": m.get("f1"),
-                    "auc_roc": m.get("auc_roc"),
-                })
-
-            # Reload model + invalidate forecast cache (mirrors the
-            # non-streaming endpoint).
-            try:
-                from app.lib.model import reload as model_reload
-                model_reload()
-                logger.info("Model reloaded after experiments.run (stream)")
-            except Exception as exc:
-                logger.warning("Model reload failed after stream run: %s", exc)
-            try:
-                from app.api.services import invalidate_forecast_cache
-                invalidate_forecast_cache(None)
-            except Exception as exc:
-                logger.warning("Forecast cache invalidation failed: %s", exc)
-
-            _emit({
-                "type": "done",
-                "best_model": results.get("best_model"),
-                "message": (
-                    f"Experiments complete. Best model: "
-                    f"{results.get('best_model', 'unknown')}"
-                ),
-                "results": results,
-            })
-        except Exception as exc:
-            logger.error("Streaming experiment run error: %s", exc)
-            _emit({"type": "error", "message": str(exc)})
-        finally:
-            # Sentinel so the consumer can exit cleanly.
-            _emit({"type": "_eof"})
-
-    async def _pump():
-        """Forward queued events to the SSE stream."""
-        gen = _event_generator()
-        # Schedule the producer as a background task so the consumer
-        # loop below can read from the queue.
-        producer = asyncio.create_task(gen)
-        try:
-            while True:
-                event = await queue.get()
-                if event.get("type") == "_eof":
-                    break
-                yield f"data: {json.dumps(event, default=str)}\n\n"
-        finally:
-            await producer
-
-    return StreamingResponse(
-        _pump(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AgentFab } from '@/components/AgentFab';
 import { api, streamChat } from '@/api';
@@ -50,26 +50,19 @@ describe('AgentFab', () => {
     expect(screen.getByText(/no conversation yet/i)).toBeInTheDocument();
   });
 
-  it('renders suggested prompts as clickable <button>s (roadmap #10)', () => {
+  it('does not render suggested prompt buttons (roadmap #10 removed)', () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // Three clickable prompt buttons, accessible by data-testid.
-    const prompts = ['agent-prompt-0', 'agent-prompt-1', 'agent-prompt-2'];
-    for (const id of prompts) {
-      const btn = screen.getByTestId(id);
-      expect(btn).toBeInTheDocument();
-      expect(btn.tagName.toLowerCase()).toBe('button');
-    }
+    expect(screen.queryByTestId('agent-prompt-0')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-prompt-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-prompt-2')).not.toBeInTheDocument();
   });
 
-  it('clicking a suggested prompt sends it (roadmap #10)', async () => {
+  it('does not render inline suggestion chips above the input', () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    fireEvent.click(screen.getByTestId('agent-prompt-0'));
-
-    await waitFor(() => expect(streamChat).toHaveBeenCalled());
-    expect(streamChat.mock.calls[0][0].message).toMatch(/dive at dauin_muck/i);
-    expect(streamChat.mock.calls[0][0].siteKey).toBe('dauin_muck');
+    expect(screen.queryByTestId('agent-suggestions')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^agent-suggestion-\d+$/)).toHaveLength(0);
   });
 
   it('renders a composer with input + send button', () => {
@@ -97,31 +90,6 @@ describe('AgentFab', () => {
     const chip = screen.getByTestId('agent-composer-site');
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toMatch(/dauin_muck/);
-  });
-
-  it('composer shows inline suggestion chips only when transcript is empty', async () => {
-    renderFab();
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    // Empty conversation: chips visible.
-    expect(screen.getByTestId('agent-suggestions')).toBeInTheDocument();
-    expect(screen.getAllByTestId(/^agent-suggestion-\d+$/).length).toBeGreaterThan(0);
-
-    // After sending a message the chips should disappear.
-    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
-    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
-    await screen.findByText(/conditions look safe at dauin today/i);
-    expect(screen.queryByTestId('agent-suggestions')).not.toBeInTheDocument();
-  });
-
-  it('a click on a suggestion chip sends the prompt immediately', async () => {
-    renderFab();
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    // The composer chips are index 0,1,2.
-    const chips = screen.getAllByTestId(/^agent-suggestion-\d+$/);
-    fireEvent.click(chips[0]);
-
-    await waitFor(() => expect(streamChat).toHaveBeenCalled());
-    expect(streamChat.mock.calls[0][0].message.length).toBeGreaterThan(0);
   });
 
   it('shows a Stop button while streaming that aborts the in-flight request', async () => {

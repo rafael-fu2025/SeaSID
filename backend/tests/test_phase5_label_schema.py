@@ -24,7 +24,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -243,7 +242,6 @@ def test_get_labels_surfaces_new_fields():
     """
     from datetime import date as _date
     from app.api import services
-    from app.lib import db as db_mod
 
     site = "dauin_muck"
     operator = "phase5_get_labels_user"

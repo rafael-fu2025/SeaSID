@@ -19,8 +19,8 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from typing import Any, Iterable
+from datetime import date
+from typing import Iterable
 
 from app.lib import db as db_mod
 
@@ -175,7 +175,7 @@ def run_all(
                 inserted = result_proxy.rowcount or 0
                 result.rows_inserted = inserted
                 result.rows_skipped = len(label_rows) - inserted
-            except Exception as exc:
+            except Exception:
                 session.rollback()
                 raise
             finally:

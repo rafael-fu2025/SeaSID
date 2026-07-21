@@ -27,7 +27,6 @@ from app.lib.providers.base import (
     WeatherProvider,
 )
 from app.lib.providers.open_meteo import (
-    OpenMeteoAirProvider,
     OpenMeteoMarineProvider,
     OpenMeteoWeatherProvider,
 )

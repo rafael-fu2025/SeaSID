@@ -23,6 +23,9 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
 
+# Linter — config in pyproject.toml [tool.ruff]. Run: python -m ruff check .
+ruff==0.15.22
+
 # Optional external data providers (Storm Glass marine, AQICN air quality)
 # are implemented in app/lib/providers/ using the standard `requests`
 # library above. No additional dependencies are required. The libraries

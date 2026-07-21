@@ -29,10 +29,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
 import pandas as pd
 
-from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
+from app.lib.features import build_features, build_sequence
 
 logger = logging.getLogger(__name__)
 

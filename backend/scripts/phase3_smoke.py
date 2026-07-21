@@ -1,7 +1,7 @@
 """Phase 3 smoke test — verify tier selection + version surface."""
 import time
 from app.api.services import get_forecast, invalidate_forecast_cache
-from app.lib.model import load_best, selected_tier, get_model_type
+from app.lib.model import load_best, selected_tier
 from app.lib.freshness import model_version
 
 # Clear caches
@@ -17,14 +17,14 @@ print("=" * 70)
 
 bundle = load_best()
 tier, reason = selected_tier()
-print(f"\nModel tier chosen at load:")
+print("\nModel tier chosen at load:")
 print(f"  tier: {tier}")
 print(f"  reason: {reason}")
 print(f"  bundle loaded: {bundle is not None}")
 print(f"  model_version string: {model_version(bundle)}")
 
 # Hit the dashboard endpoint
-print(f"\n--- Dashboard forecast (12h horizon) ---")
+print("\n--- Dashboard forecast (12h horizon) ---")
 t0 = time.perf_counter()
 result = get_forecast("dauin_muck", hours=12)
 elapsed_ms = (time.perf_counter() - t0) * 1000

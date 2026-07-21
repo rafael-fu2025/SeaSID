@@ -4,7 +4,6 @@ import {
   Square,
   Paperclip,
   X,
-  Sparkles,
   CornerDownLeft,
   CornerDownRight,
 } from 'lucide-react';
@@ -37,8 +36,6 @@ import { cn } from '@/lib/utils';
  *   siteKey:      string — shown as a small chip in the corner so the
  *                  operator always sees which site the next prompt
  *                  will be sent against.
- *   suggestions:  string[] — clickable chips that fill + send the
- *                  input. Empty array hides the suggestion row.
  *   placeholder:  string — placeholder for the textarea
  *   maxRows:     number — soft cap on auto-growth (default 6)
  *
@@ -61,7 +58,6 @@ const ChatComposer = forwardRef(function ChatComposer({
   onStop,
   busy = false,
   siteKey,
-  suggestions = [],
   placeholder = 'Ask the agent…',
   maxRows = 6,
 }, ref) {
@@ -182,31 +178,6 @@ const ChatComposer = forwardRef(function ChatComposer({
         busy && 'opacity-90',
       )}
     >
-      {suggestions.length > 0 && (
-        <div
-          className="flex gap-1.5 overflow-x-auto border-b border-border/60 px-3 py-2"
-          data-testid="agent-suggestions"
-        >
-          <Sparkles className="size-3.5 shrink-0 text-reef" aria-hidden />
-          {suggestions.map((s, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => onSend(s)}
-              disabled={busy}
-              data-testid={`agent-suggestion-${idx}`}
-              className={cn(
-                'shrink-0 rounded-full border border-border bg-background px-2.5 py-0.5 text-[11px]',
-                'text-foreground/80 transition-colors hover:border-reef/40 hover:bg-reef/5 hover:text-foreground',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div className="flex items-end gap-2 p-2.5">
         <Tooltip>
           <TooltipTrigger asChild>

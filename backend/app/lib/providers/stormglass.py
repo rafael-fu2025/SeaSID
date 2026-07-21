@@ -28,7 +28,6 @@ import requests
 from app.lib.providers.base import (
     MarineProvider,
     ProviderInfo,
-    ProviderError,
 )
 
 logger = logging.getLogger(__name__)

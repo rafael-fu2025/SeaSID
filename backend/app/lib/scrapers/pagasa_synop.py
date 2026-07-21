@@ -20,7 +20,7 @@ Source: ``pagasa_synop``
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from app.lib.scrapers.base import BaseScraper, register_scraper
 from app.lib.sites import get_site
@@ -120,11 +120,14 @@ class PagasaSynopScraper(BaseScraper):
                                 label = "no_dive"
                                 reason = preset_reason
                             elif rain_mm > 25 or wind_max > 35 or wave_m > 2.0:
-                                label = "no_dive"; reason = "weather"
+                                label = "no_dive"
+                                reason = "weather"
                             elif rain_mm > 12 or wind_max > 20 or wave_m > 1.2:
-                                label = "poor_viz"; reason = "weather"
+                                label = "poor_viz"
+                                reason = "weather"
                             else:
-                                label = "dive"; reason = None
+                                label = "dive"
+                                reason = None
                             confidence = preset_confidence or "low"
                         else:
                             if rain_mm > 25 or wind_max > 35 or wave_m > 2.0:

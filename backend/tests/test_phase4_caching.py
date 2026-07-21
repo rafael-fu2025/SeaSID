@@ -14,11 +14,9 @@ Tested contracts:
 """
 from __future__ import annotations
 
-import time
 from datetime import datetime, timezone
 
 import numpy as np
-import pytest
 
 
 def test_cache_hit_returns_same_dict():

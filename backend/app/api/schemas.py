@@ -4,7 +4,7 @@ Pydantic schemas for API request/response validation.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field

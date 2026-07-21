@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -23,11 +22,10 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     confusion_matrix,
-    roc_curve,
 )
 
 from app.lib.features import FEATURE_COLUMNS
-from app.lib.scoring import score_hour, risk_label, label_to_binary, features_dict_from_row
+from app.lib.scoring import score_hour, risk_label
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +93,6 @@ def _time_aware_split(
 
     # Stable sort so ties (same date) preserve original insertion order.
     order = sorted(range(n), key=lambda i: (label_dates[i], i))
-    sorted_dates = [label_dates[i] for i in order]
 
     train_end = max(1, int(round(n * train_frac)))
     val_end = max(train_end + 1, int(round(n * (train_frac + val_frac))))
@@ -193,7 +190,6 @@ def run_full_experiment_suite(
             logger.debug("progress_callback raised: %s", exc)
 
     n_total = len(X_flat)
-    n_real = int((y >= 0).sum())  # all are valid labels
 
     _log(f"Running experiments on {n_total} samples...")
 
@@ -233,15 +229,18 @@ def run_full_experiment_suite(
     X_val_f = X_flat.iloc[val_idx]
     X_test_f = X_flat.iloc[test_idx]
     y_train = y.iloc[train_idx]
-    y_val = y.iloc[val_idx]
+    # The validation split is materialized for parity with train/test but is not
+    # consumed by the current experiment flow; keep it addressable for future
+    # validation metrics without tripping the unused-variable check (F841).
+    y_val = y.iloc[val_idx]  # noqa: F841
     y_test = y.iloc[test_idx]
 
-    # Same splits for sequences
+    # Same splits for sequences (validation parity — see note above).
     X_train_seq = X_seq[train_idx]
-    X_val_seq = X_seq[val_idx]
+    X_val_seq = X_seq[val_idx]  # noqa: F841
     X_test_seq = X_seq[test_idx]
     y_train_arr = y_arr[train_idx]
-    y_val_arr = y_arr[val_idx]
+    y_val_arr = y_arr[val_idx]  # noqa: F841
     y_test_arr = y_arr[test_idx]
 
     dataset_summary = {

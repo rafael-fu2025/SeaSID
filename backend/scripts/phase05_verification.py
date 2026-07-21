@@ -20,10 +20,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pandas as pd
 
 from app.lib.db import SessionLocal, WeatherObs, MarineObs, TideObs
-from app.lib.features import build_features, build_features_for_window, build_sequence
+from app.lib.features import build_features, build_sequence
 from app.lib.scoring import (
     score_hour, risk_label, features_dict_from_row,
     p_bad_from_rules,

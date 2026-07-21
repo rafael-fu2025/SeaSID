@@ -7,7 +7,6 @@ import time
 from datetime import datetime, timezone
 
 from app.lib.model import load_best, get_model_type, predict
-from app.lib.features import build_sequence
 
 print("=" * 60)
 print("PHASE 2 SMOKE: retrained LSTM works on 14-feature schema")
@@ -37,7 +36,7 @@ print(f"\np_bad spread: [{pmin:.3f}, {pmax:.3f}]  (width={spread:.3f})")
 print(f"unique values: {len(set(round(p, 3) for p in predictions))}/6")
 
 if spread > 0.05:
-    print(f"\n✅ Phase 2 verification SUCCESSFUL — LSTM produces real, non-degenerate probabilities")
+    print("\n✅ Phase 2 verification SUCCESSFUL — LSTM produces real, non-degenerate probabilities")
 else:
-    print(f"\n⚠️ Predictions are nearly flat — model still data-limited (F1=0 on 104 samples),")
-    print(f"   but the technical fix is in place: no schema-mismatch crash.")
+    print("\n⚠️ Predictions are nearly flat — model still data-limited (F1=0 on 104 samples),")
+    print("   but the technical fix is in place: no schema-mismatch crash.")

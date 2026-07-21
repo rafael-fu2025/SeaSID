@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Send, RotateCcw, MapPin, Sparkles } from 'lucide-react';
+import { Bot, RotateCcw, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SiteSelector } from '@/components/SiteSelector';
 import { cn } from '@/lib/utils';
-import { api, streamChat } from '@/api';
+import { streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
 import { Message } from './agent/Message';
 import { StreamingDots } from './agent/StreamingDots';
@@ -34,7 +34,6 @@ function newMessageId() {
  * AgentFab — floating AI assistant.
  *
  * Roadmap #10 polish (roadmap next-move backlog):
- *  - Suggested prompts render as real <button>s that populate + send.
  *  - Site context is visible + changeable inside the Sheet header via
  *    SiteSelector (defaults to initialSiteKey from props).
  *  - Composer hint matches actual behaviour: single-line <Input>, Enter
@@ -43,11 +42,6 @@ function newMessageId() {
  *  - Reset confirms via window.confirm when the transcript is non-empty,
  *    so a fat-finger click cannot wipe an in-progress conversation.
  */
-const PROMPTS = [
-  'Should I dive at the current site tomorrow morning?',
-  'Compare current conditions across both sites.',
-  'Generate a one-page safety briefing for the current site.',
-];
 
 function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [open, setOpen] = useState(false);
@@ -375,7 +369,21 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           data-testid="agent-transcript"
         >
           {messages.length === 0 && !busy ? (
-            <EmptyState siteKey={siteKey} onPickPrompt={send} disabled={busy} />
+            <div
+              className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center"
+              data-testid="agent-empty-state"
+            >
+              <div className="flex size-12 items-center justify-center rounded-full bg-reef/10 text-reef">
+                <Bot className="size-5" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">No conversation yet</p>
+                <p className="mt-1 max-w-[260px] text-xs text-muted-foreground">
+                  Ask for a briefing, conditions check, or run any of the 7 agent tools.
+                  Site pinned to <span className="font-mono text-foreground">{siteKey}</span>.
+                </p>
+              </div>
+            </div>
           ) : (
             <div className="flex flex-col gap-3">
               {messages.map((m, i) => (
@@ -403,12 +411,6 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             onStop={stop}
             busy={busy}
             siteKey={siteKey}
-            suggestions={
-              // Inline suggestion chips are most useful at the start of
-              // a conversation; once the user is mid-thread the chips
-              // become noise, so we hide them after the first turn.
-              messages.length === 0 ? personalisedPrompts() : []
-            }
             placeholder={`Ask the agent about ${siteKey}…`}
           />
         </div>
@@ -425,55 +427,6 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
       onConfirm={confirmReset}
     />
     </>
-  );
-}
-
-/**
- * Build the prompt-chip list, personalising the "current site" string
- * to the actual selected site. Kept outside the component so the
- * substitution runs only on render and doesn't recreate strings on
- * every keystroke.
- */
-function personalisedPrompts() {
-  return PROMPTS;
-}
-
-function EmptyState({ siteKey, onPickPrompt, disabled }) {
-  // Personalise the prompts so the user knows the suggested questions
-  // apply to the currently selected site (visible in the header above).
-  const personalised = PROMPTS.map((p) =>
-    p.replace('the current site', siteKey).replace('across both sites', 'across both sites'),
-  );
-
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center">
-      <div className="flex size-12 items-center justify-center rounded-full bg-reef/10 text-reef">
-        <Bot className="size-5" />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-foreground">No conversation yet</p>
-        <p className="mt-1 max-w-[260px] text-xs text-muted-foreground">
-          Ask for a briefing, conditions check, or run any of the 7 agent tools.
-          Site pinned to <span className="font-mono text-foreground">{siteKey}</span>.
-        </p>
-      </div>
-      <div className="grid w-full gap-1.5 text-left text-xs">
-        {personalised.map((p, i) => (
-          <Button
-            key={p}
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onPickPrompt(p)}
-            disabled={disabled}
-            data-testid={`agent-prompt-${i}`}
-            className="h-auto justify-start whitespace-normal px-2.5 py-2 text-left font-normal"
-          >
-            {p}
-          </Button>
-        ))}
-      </div>
-    </div>
   );
 }
 

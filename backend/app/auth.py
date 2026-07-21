@@ -234,7 +234,6 @@ def get_active_users():
     if rows:
         result = []
         for row in rows:
-            password = None
             # user_store keeps password_hash only; the auth path verifies via hash.
             from app.lib.user_store import _parse_site_keys
             result.append(ConfiguredUser(
@@ -270,7 +269,10 @@ def hash_password(password: str, iterations: int = 310_000) -> str:
     """Create a portable PBKDF2-SHA256 password hash string."""
     salt = secrets.token_bytes(16)
     digest = _derive_password_hash(password, salt, iterations)
-    encode = lambda value: base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
     return f"pbkdf2_sha256${iterations}${encode(salt)}${encode(digest)}"
 
 

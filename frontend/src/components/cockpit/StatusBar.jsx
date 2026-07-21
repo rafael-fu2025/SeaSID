@@ -17,7 +17,7 @@ import { useTheme } from '@/theme/ThemeContext';
  * button). On mobile/tablet the drawer trigger buttons appear in front
  * of the metadata so the only persistent chrome is reachable.
  */
-export function StatusBar({ onOpenPalette, onOpenAgent, children }) {
+export function StatusBar({ onOpenPalette, children }) {
   const { theme, cycleTheme } = useTheme();
   const [now, setNow] = useState(() => new Date());
 

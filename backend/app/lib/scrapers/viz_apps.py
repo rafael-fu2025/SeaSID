@@ -18,11 +18,10 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from app.lib.scrapers.base import BaseScraper, register_scraper
-from app.lib.sites import get_site
 
 logger = logging.getLogger(__name__)
 

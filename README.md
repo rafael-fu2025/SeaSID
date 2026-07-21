@@ -108,9 +108,30 @@ The dashed boxes (Storm Glass, AQICN) are optional — when no enabled database 
 
 ### Prerequisites
 
-- Python 3.12+
-- Node.js 18+
+- Python **3.12** (pinned in [`backend/.python-version`](backend/.python-version); newer minors work but dependencies are verified on 3.12)
+- Node.js **20+** (pinned in [`frontend/.nvmrc`](frontend/.nvmrc))
 - An administrator account for configuring encrypted provider credentials
+
+> With [pyenv](https://github.com/pyenv/pyenv) and [nvm](https://github.com/nvm-sh/nvm) installed, `cd backend && pyenv install` and `cd frontend && nvm use` auto-select the pinned runtimes.
+
+### One-command setup
+
+From a clean checkout, this creates the backend virtualenv, installs backend and
+frontend dependencies, copies the `.env` files, initializes the database, and
+seeds sample history:
+
+```bash
+python dev.py setup        # or, on macOS/Linux:  make setup
+```
+
+Check your toolchain and environment at any time — it reports the specific gap
+for any missing runtime or required variable:
+
+```bash
+python dev.py doctor       # or:  make doctor
+```
+
+The manual steps below are equivalent and remain available.
 
 ### 1. Backend Setup
 
@@ -293,6 +314,28 @@ npm test
 | Backend         | 8            | **66**  |
 | Frontend        | 20           | **81**  |
 | **Total** | **28** | **147** |
+
+---
+
+## Linting
+
+Both stacks ship a lint layer — run it from each stack directory:
+
+```bash
+# Backend — Ruff (config: backend/pyproject.toml)
+cd backend
+.venv/Scripts/python -m ruff check .        # report issues as file:line: rule
+.venv/Scripts/python -m ruff check . --fix  # apply the safe auto-fixes
+
+# Frontend — ESLint flat config (frontend/eslint.config.js)
+cd frontend
+npm run lint            # report issues
+npm run lint -- --fix   # apply the auto-fixable subset
+```
+
+Both linters are wired into the `git push` validation gate
+([`githooks/pre-push`](githooks/pre-push)) and the change-to-check map in
+[`AGENTS.md`](AGENTS.md).
 
 ---
 

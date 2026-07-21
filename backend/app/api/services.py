@@ -4,17 +4,14 @@ Service layer — business logic between API routes and core library.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone, date as date_type
-from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 
 from app.lib import db
 from app.lib.features import (
     build_features, build_features_for_window, build_sequences_for_window,
-    FEATURE_COLUMNS,
 )
 from app.lib.freshness import compute_freshness, model_version
 from app.lib.providers import active_providers
@@ -22,14 +19,10 @@ from app.lib.scoring import (
     score_hour,
     risk_label,
     features_dict_from_row,
-    derive_label,
-    label_to_binary,
     p_bad_from_rules,
 )
-from app.lib.sites import get_site, get_all_sites, site_keys
+from app.lib.sites import get_site, site_keys
 from app.lib.model import load_best, predict, get_model_type
-from app.lib.ingest import ingest_site
-from app.lib.alerts import get_recent_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +414,7 @@ def submit_verification(
             "no_go_reason": no_go_reason,
             "confidence": confidence,
         }
-    except Exception as exc:
+    except Exception:
         session.rollback()
         raise
     finally:

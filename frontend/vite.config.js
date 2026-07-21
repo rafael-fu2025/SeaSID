@@ -16,6 +16,14 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    // Allow any trycloudflare.com quick-tunnel hostname (regenerated on each
+    // `cloudflared tunnel --url` run) so the dev server doesn't block
+    // requests from the public tunnel. Safe for local dev only.
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      '.trycloudflare.com',
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
