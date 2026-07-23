@@ -60,7 +60,7 @@ describe('App routing', () => {
     expect(await screen.findByRole('heading', { name: /dashboard/i })).toBeInTheDocument();
     expect(screen.getByTestId('agent-fab')).toBeInTheDocument();
     expect(screen.getByTestId('status-clock')).toBeInTheDocument();
-    expect(screen.getByTestId('open-palette')).toBeInTheDocument();
+    expect(screen.getByTestId('status-foundation')).toBeInTheDocument();
     // UserMenu trigger is in the sidebar header (always above the fold).
     expect(screen.getByTestId('user-menu-trigger')).toBeInTheDocument();
   });

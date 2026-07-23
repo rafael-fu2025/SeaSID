@@ -56,7 +56,7 @@ export default function UserMenu({ variant = 'sidebar' }) {
           data-testid="user-menu-trigger"
           className={
             compact
-              ? 'flex size-8 items-center justify-center rounded-full border border-border bg-card text-xs font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+              ? 'flex size-9 items-center justify-center self-center rounded-full border border-border bg-card text-xs font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
               : 'flex w-full items-center gap-3 rounded-md border border-border bg-card/60 px-3 py-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
           }
         >
@@ -78,9 +78,11 @@ export default function UserMenu({ variant = 'sidebar' }) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        side="bottom"
+        side={compact ? 'top' : 'right'}
         align={compact ? 'center' : 'start'}
-        sideOffset={compact ? 6 : 4}
+        sideOffset={compact ? 6 : 8}
+        alignOffset={compact ? 0 : 0}
+        collisionPadding={8}
         className="w-56"
       >
         <DropdownMenuLabel className="flex flex-col gap-1">

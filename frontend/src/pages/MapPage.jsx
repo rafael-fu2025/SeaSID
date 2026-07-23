@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { api } from '@/api';
@@ -22,6 +22,11 @@ import { useTheme } from '@/theme/ThemeContext';
  *    encodes the per-site risk band.
  *  - Site cards under the map show the same data in tabular form for
  *    keyboard / non-map users.
+ *  - Listens for the global ``seasid:refresh`` event so a completed
+ *    experiment suite (which the backend reloads with fresh weights
+ *    and invalidates the per-site forecast cache) immediately re-renders
+ *    the heat radii + per-site cards against the new model — every
+ *    site, one parallel batch, no manual refresh needed.
  */
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ATTRIBUTION = '&copy; OpenStreetMap contributors';
@@ -60,30 +65,54 @@ export default function MapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [zoomUnlocked, setZoomUnlocked] = useState(false);
+  // Token checked on every async callback so an unmount or stale refresh
+  // burst (e.g. ``seasid:refresh`` firing repeatedly while a run is in
+  // progress) doesn't overwrite newer state with an old payload.
+  const fetchTokenRef = useRef(0);
 
-  // Pull sites + forecasts in parallel.
-  useEffect(() => {
-    let cancel = false;
-    setLoading(true);
+  // Pull sites + forecasts in parallel. Lives in a useCallback so the
+  // ``seasid:refresh`` listener below can fire the same fetcher when an
+  // experiment suite finishes and re-trains the active model.
+  const loadData = useCallback(async ({ silent = false } = {}) => {
+    const token = ++fetchTokenRef.current;
+    if (!silent) setLoading(true);
     setError(null);
-    api.getSites()
-      .then(async (s) => {
-        if (cancel) return;
-        setSites(s || []);
-        const pairs = await Promise.allSettled(
-          (s || []).map((site) =>
-            api.getForecast(site.key).then((fc) => [site.key, fc]).catch(() => [site.key, null]),
-          ),
-        );
-        if (cancel) return;
-        const map = {};
-        for (const p of pairs) if (p.status === 'fulfilled') map[p.value[0]] = p.value[1];
-        setForecasts(map);
-      })
-      .catch((err) => { if (!cancel) setError(err.message); })
-      .finally(() => { if (!cancel) setLoading(false); });
-    return () => { cancel = true; };
+    try {
+      const s = await api.getSites();
+      if (token !== fetchTokenRef.current) return;
+      setSites(s || []);
+      const pairs = await Promise.allSettled(
+        (s || []).map((site) =>
+          api.getForecast(site.key).then((fc) => [site.key, fc]).catch(() => [site.key, null]),
+        ),
+      );
+      if (token !== fetchTokenRef.current) return;
+      const map = {};
+      for (const p of pairs) if (p.status === 'fulfilled') map[p.value[0]] = p.value[1];
+      setForecasts(map);
+    } catch (err) {
+      if (token !== fetchTokenRef.current) return;
+      setError(err.message);
+    } finally {
+      if (token === fetchTokenRef.current && !silent) setLoading(false);
+    }
   }, []);
+
+  // Initial load on mount.
+  useEffect(() => {
+    loadData();
+    return () => { fetchTokenRef.current += 1; };
+  }, [loadData]);
+
+  // Background refresh whenever any cockpit page broadcasts
+  // ``seasid:refresh`` — notably fired by the Experiments page after the
+  // experiment suite's ``done`` event, which is exactly when the backend
+  // has reloaded the active model and dropped the cached forecasts.
+  useEffect(() => {
+    const onRefresh = () => { loadData({ silent: true }); };
+    window.addEventListener('seasid:refresh', onRefresh);
+    return () => window.removeEventListener('seasid:refresh', onRefresh);
+  }, [loadData]);
 
   // Build Leaflet map once.
   useEffect(() => {

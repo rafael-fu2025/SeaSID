@@ -31,8 +31,15 @@ function isEmptyResults(results) {
  *
  *  - Two suites: LSTM, XGBoost, GRU, rule-based.
  *  - Five metrics × 4 models in a single sortable table.
- *  - "Run" button POSTs /api/v1/experiments/run which auto-reloads
- *    the active model on the backend.
+ *  - "Run" button POSTs /api/v1/experiments/run/stream (SSE) which
+ *    streams `status` / `log` / `metric` / `done` frames so the UI can
+ *    show live progress + per-model metrics, then auto-reloads the
+ *    active model and invalidates the forecast cache on completion.
+ *  - On ``done`` we dispatch two window events so the rest of the
+ *    cockpit catches up without a manual refresh:
+ *      • ``seasid:experiments-complete`` — carries the new best model.
+ *      • ``seasid:refresh`` — triggers Dashboard / Forecast / MapPage
+ *        to refetch their forecast data against the fresh bundle.
  *  - Listens for the global `seasid:refresh` event for parity with
  *    other cockpit pages.
  */
@@ -120,6 +127,30 @@ export default function Experiments() {
         if (closeStreamRef.current) {
           closeStreamRef.current();
           closeStreamRef.current = null;
+        }
+        // The backend ``/api/v1/experiments/run`` already reloads the ML
+        // bundle and invalidates every site's forecast cache. Tell every
+        // interested page to pick up the new state without waiting for a
+        // manual refresh.
+        //
+        //   * ``seasid:experiments-complete`` carries the chosen best
+        //     model so the ModelStatusContext (and therefore the
+        //     StatusBar's "Model" chip) can update immediately.
+        //   * ``seasid:refresh`` is the long-standing global refresh
+        //     signal — Dashboard, Forecast, MapPage, the forecast
+        //     provenance strip, and any other data-bound component
+        //     already listen to it and will refetch against the new
+        //     model weights now that the cache is empty.
+        const bestModel = p?.best_model || p?.results?.best_model || null;
+        try {
+          window.dispatchEvent(new CustomEvent('seasid:experiments-complete', {
+            detail: { best_model: bestModel, results: p?.results || null },
+          }));
+          window.dispatchEvent(new CustomEvent('seasid:refresh'));
+        } catch (eventErr) {
+          // Older browsers (or jsdom) without CustomEvent in some
+          // contexts shouldn't take the whole run down with them.
+          console.debug('experiments-complete dispatch failed', eventErr);
         }
       },
       onError: (message) => {

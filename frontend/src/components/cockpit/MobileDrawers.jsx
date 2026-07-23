@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 
 const NAV_DRAWER_WIDTH = 'w-[280px] sm:w-[320px]';
 
-export function MobileNavDrawer({ onResetLayout }) {
+export function MobileNavDrawer() {
   const [open, setOpen] = useState(false);
 
   return (
@@ -42,7 +42,6 @@ export function MobileNavDrawer({ onResetLayout }) {
         <SidebarNav
           collapsed={false}
           onToggle={undefined}
-          onResetLayout={onResetLayout}
           hideCollapseChevron
         />
       </SheetContent>

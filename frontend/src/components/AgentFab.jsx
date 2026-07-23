@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, RotateCcw, MapPin } from 'lucide-react';
+import { Bot, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+  Sheet, SheetContent, SheetHeader, SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { SiteSelector } from '@/components/SiteSelector';
+import { useTheme } from '@/theme/ThemeContext';
 import { cn } from '@/lib/utils';
-import { streamChat } from '@/api';
+import { api, streamChat } from '@/api';
 import MarkdownResponse from './MarkdownResponse';
 import { Message } from './agent/Message';
 import { StreamingDots } from './agent/StreamingDots';
@@ -51,6 +49,13 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [sites, setSites] = useState([]);
+  const [isSiteMenuOpen, setIsSiteMenuOpen] = useState(false);
+  const siteMenuRef = useRef(null);
+  const { theme } = useTheme();
+  // Use the squared favicon family to mirror the brand mark used in the
+  // sidebar, swapping to the lighter variant in dark theme.
+  const brandIcon = theme === 'dark' ? '/seasid_1x1-light.png' : '/seasid_1x1.png';
   const scrollRef = useRef(null);
   // Holds the AbortController for the in-flight stream so the Stop
   // button (or an unmount) can cancel it. We keep this at the FAB
@@ -70,6 +75,31 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     window.addEventListener('seasid:open-agent', handler);
     return () => window.removeEventListener('seasid:open-agent', handler);
   }, []);
+
+  // Pull the registered sites so the native popover can list them.
+  useEffect(() => {
+    let cancelled = false;
+    api.getSites()
+      .then((rows) => {
+        if (!cancelled) setSites(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSites([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Close the site picker when the operator clicks anywhere else.
+  useEffect(() => {
+    if (!isSiteMenuOpen) return undefined;
+    const handleOutside = (event) => {
+      if (siteMenuRef.current && !siteMenuRef.current.contains(event.target)) {
+        setIsSiteMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutside);
+    return () => window.removeEventListener('mousedown', handleOutside);
+  }, [isSiteMenuOpen]);
 
   // Auto-focus the textarea whenever the sheet opens or the FAB mounts.
   // The Sheet mounts the composer lazily on first open, so we can't
@@ -300,35 +330,29 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="flex h-full w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
+        className="flex h-full w-full max-w-md flex-col gap-0 overflow-visible p-0 sm:max-w-md"
       >
         <SheetHeader className="flex flex-col gap-3 border-b border-border bg-card px-5 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div
-                className="relative flex size-10 shrink-0 items-center justify-center bg-reef text-reef-foreground"
-                aria-hidden
-              >
-                <Bot className="size-5" />
-                <span
-                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-positive shadow-[0_0_0_2px_var(--card)]"
-                  data-testid="agent-status-dot"
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
-                <SheetDescription className="mt-0.5 text-xs leading-snug">
-                  7 tools · live briefing
-                </SheetDescription>
-              </div>
-            </div>
+          {/* Brand + title + reset + site picker all share one row so the
+              operator can change the active site without scanning back to
+              a second row beneath the title. */}
+          <div className="flex items-center gap-2">
+            <img
+              src={brandIcon}
+              alt=""
+              aria-hidden
+              width={32}
+              height={32}
+              className="size-8 shrink-0 rounded-md object-contain"
+            />
+            <SheetTitle className="text-base leading-tight">SeaSID Agent</SheetTitle>
 
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-9 shrink-0"
+                  className="ml-auto size-8 shrink-0"
                   onClick={reset}
                   aria-label="Reset conversation"
                   data-testid="agent-reset"
@@ -341,24 +365,48 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
                 {messages.length === 0 ? 'Nothing to reset' : 'Reset conversation'}
               </TooltipContent>
             </Tooltip>
-          </div>
 
-          {/* Site context selector (roadmap #10): visible + changeable
-              inside the Sheet so the user always knows which site the
-              next prompt will be sent against. */}
-          <div className="flex items-center gap-2" data-testid="agent-site-context">
-            <MapPin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
-              Site
-            </span>
-            <div className="min-w-0 flex-1">
-              <SiteSelector
-                value={siteKey}
-                onChange={setSiteKey}
-                ariaLabel="Agent site context"
-                id="agent-site-selector"
-                className="h-8 text-xs"
-              />
+            <div className="relative w-32 shrink-0" ref={siteMenuRef}>
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={isSiteMenuOpen}
+                data-testid="agent-site-selector"
+                onClick={() => setIsSiteMenuOpen((value) => !value)}
+                className="flex h-8 w-full items-center gap-2 truncate rounded-md border border-input bg-background px-2.5 text-xs text-foreground hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="truncate font-mono">{siteKey}</span>
+              </button>
+              {isSiteMenuOpen && sites && sites.length > 0 && (
+                <div
+                  role="menu"
+                  aria-label="Select dive site"
+                  className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+                >
+                  {sites.map((site) => (
+                    <button
+                      key={site.key}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setSiteKey(site.key);
+                        setIsSiteMenuOpen(false);
+                      }}
+                      data-testid={`site-option-${site.key}`}
+                      className={cn(
+                        'flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground',
+                        site.key === siteKey && 'bg-accent text-accent-foreground',
+                      )}
+                    >
+                      <span className="inline-block size-1.5 rounded-full bg-foreground/40" />
+                      <span className="flex-1 truncate">{site.name}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {site.type}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </SheetHeader>
@@ -373,9 +421,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
               className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center"
               data-testid="agent-empty-state"
             >
-              <div className="flex size-12 items-center justify-center rounded-full bg-reef/10 text-reef">
-                <Bot className="size-5" />
-              </div>
+              <img
+                src="/diver.gif"
+                alt=""
+                aria-hidden
+                width={64}
+                height={64}
+                className="size-16 rounded-md object-contain"
+              />
               <div>
                 <p className="text-sm font-medium text-foreground">No conversation yet</p>
                 <p className="mt-1 max-w-[260px] text-xs text-muted-foreground">

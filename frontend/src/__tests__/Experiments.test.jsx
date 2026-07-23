@@ -163,6 +163,115 @@ describe('Experiments page', () => {
   });
 });
 
+describe('Experiments page — automatic UI refresh on completion', () => {
+  let listeners;
+  let originalDispatch;
+  beforeEach(() => {
+    // Capture every dispatchEvent invocation so each test can assert the
+    // expected events were broadcast when the experiment suite completes.
+    listeners = [];
+    originalDispatch = window.dispatchEvent.bind(window);
+    window.dispatchEvent = (event) => {
+      listeners.push({
+        type: event?.type ?? null,
+        detail: event instanceof CustomEvent ? event.detail : undefined,
+      });
+      return originalDispatch(event);
+    };
+  });
+  afterEach(() => {
+    // Restore the real dispatchEvent so other test files in this suite
+    // (or future jsdom-runs within this file) don't see the spy.
+    if (typeof window !== 'undefined' && originalDispatch) {
+      window.dispatchEvent = originalDispatch;
+    }
+  });
+
+  it('broadcasts seasid:experiments-complete + seasid:refresh on the stream done event', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onDone?.({
+      best_model: 'xgb',
+      results: {
+        best_model: 'xgb',
+        model_comparison: {
+          xgb: { accuracy: 0.9, precision: 0.91, recall: 0.99, f1: 0.94, auc_roc: 0.85 },
+          lstm: { accuracy: 0.84, f1: 0.88, auc_roc: 0.81 },
+        },
+      },
+    });
+
+    // Both events should be on the wire so the StatusBar model chip
+    // and the Dashboard / Forecast / MapPage forecast fetchers all
+    // catch up without a manual refresh.
+    await waitFor(() => {
+      const types = listeners.map((l) => l.type);
+      expect(types).toContain('seasid:experiments-complete');
+      expect(types).toContain('seasid:refresh');
+    });
+    const complete = listeners.find((l) => l.type === 'seasid:experiments-complete');
+    expect(complete.detail.best_model).toBe('xgb');
+    expect(complete.detail.results.model_comparison.xgb.accuracy).toBeCloseTo(0.9);
+  });
+
+  it('falls back to results.best_model when the top-level best_model is absent', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onDone?.({
+      // Older backend: best_model only lives under results.
+      results: {
+        best_model: 'lstm',
+        model_comparison: { lstm: { f1: 0.9 } },
+      },
+    });
+
+    await waitFor(() => {
+      const c = listeners.find((l) => l.type === 'seasid:experiments-complete');
+      expect(c?.detail?.best_model).toBe('lstm');
+    });
+  });
+
+  it('does NOT broadcast on cancel — only on a successful completion', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers, close } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+    handlers.onStatus?.({ stage: 'running' });
+    const cancelBtn = await screen.findByTestId('experiments-cancel');
+    await user.click(cancelBtn);
+    // close() is called by the cancel handler; onDone never fires, so
+    // neither refresh signal should have gone out.
+    expect(close).toHaveBeenCalled();
+    const types = listeners.map((l) => l.type);
+    expect(types).not.toContain('seasid:experiments-complete');
+    expect(types).not.toContain('seasid:refresh');
+  });
+
+  it('does NOT broadcast on a stream error', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onError?.('No labels in database');
+    const types = listeners.map((l) => l.type);
+    expect(types).not.toContain('seasid:experiments-complete');
+    expect(types).not.toContain('seasid:refresh');
+  });
+});
+
 describe('Experiments page — streaming run', () => {
   it('opens an SSE stream and renders log lines as they arrive', async () => {
     const user = userEvent.setup();

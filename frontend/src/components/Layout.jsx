@@ -22,7 +22,6 @@ export default function Layout() {
   const {
     leftCollapsed,
     toggleLeft,
-    reset,
   } = useLayoutPrefs();
   const isDesktop = useIsDesktop();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -43,8 +42,7 @@ export default function Layout() {
     };
   }, []);
 
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
-  const openAgent   = useCallback(() => {
+  const openAgent = useCallback(() => {
     window.dispatchEvent(new CustomEvent('seasid:open-agent'));
   }, []);
 
@@ -54,16 +52,10 @@ export default function Layout() {
         <DesktopShell
           leftCollapsed={leftCollapsed}
           onToggleLeft={toggleLeft}
-          resetLayout={reset}
-          openPalette={openPalette}
           openAgent={openAgent}
         />
       ) : (
-        <MobileShell
-          resetLayout={reset}
-          openPalette={openPalette}
-          openAgent={openAgent}
-        />
+        <MobileShell openAgent={openAgent} />
       )}
 
       {/* Cross-breakpoint overlays */}
@@ -77,7 +69,7 @@ export default function Layout() {
   );
 }
 
-function DesktopShell({ leftCollapsed, onToggleLeft, resetLayout, openPalette, openAgent }) {
+function DesktopShell({ leftCollapsed, onToggleLeft, openAgent }) {
   return (
     <>
       <div className="flex min-h-0 flex-1">
@@ -93,7 +85,6 @@ function DesktopShell({ leftCollapsed, onToggleLeft, resetLayout, openPalette, o
           <SidebarNav
             collapsed={leftCollapsed}
             onToggle={onToggleLeft}
-            onResetLayout={resetLayout}
           />
         </div>
 
@@ -102,20 +93,20 @@ function DesktopShell({ leftCollapsed, onToggleLeft, resetLayout, openPalette, o
         </main>
       </div>
 
-      <StatusBar onOpenPalette={openPalette} onOpenAgent={openAgent} />
+      <StatusBar onOpenAgent={openAgent} />
     </>
   );
 }
 
-function MobileShell({ resetLayout, openPalette, openAgent }) {
+function MobileShell({ openAgent }) {
   return (
     <>
       <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         <Outlet />
       </main>
 
-      <StatusBar onOpenPalette={openPalette} onOpenAgent={openAgent}>
-        <MobileNavDrawer onResetLayout={resetLayout} />
+      <StatusBar onOpenAgent={openAgent}>
+        <MobileNavDrawer />
       </StatusBar>
     </>
   );

@@ -149,6 +149,7 @@ def run_full_experiment_suite(
     label_dates: Sequence[date] | None = None,
     label_site_keys: Sequence[str] | None = None,
     progress_callback=None,
+    metric_callback=None,
 ) -> dict:
     """
     Run the complete experiment suite:
@@ -170,6 +171,15 @@ def run_full_experiment_suite(
     watching the UI sees the same progress that was previously only
     visible in the server console. ``print`` is always kept for
     back-compat (so CLI / direct-script users still see the output).
+
+    ``metric_callback`` is an optional ``callable(str, dict) -> None``
+    invoked once per model after its metrics are computed. The first
+    argument is the model key (``"rule"``, ``"xgb"``, ``"lstm"``,
+    ``"gru"``); the second is the metrics dict (accuracy / precision /
+    recall / f1 / auc_roc). The streaming endpoint forwards each
+    invocation to the browser as an SSE ``metric`` event so the model
+    comparison table can fill in row-by-row as the suite runs, rather
+    than only after the whole run finishes.
     """
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -188,6 +198,20 @@ def run_full_experiment_suite(
             progress_callback(message)
         except Exception as exc:  # pragma: no cover — defensive
             logger.debug("progress_callback raised: %s", exc)
+
+    def _emit_metric(model_key: str, metrics: dict) -> None:
+        """Forward one model's finished metrics to a structured subscriber.
+
+        Mirrors the defensive wrapping in :func:`_log`: the SSE consumer
+        for the streaming endpoint lives in a worker thread, so any
+        exception it raises must not abort the training pipeline.
+        """
+        if metric_callback is None:
+            return
+        try:
+            metric_callback(model_key, metrics)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("metric_callback raised: %s", exc)
 
     n_total = len(X_flat)
 
@@ -271,12 +295,14 @@ def run_full_experiment_suite(
     rule_metrics = _evaluate_rule_based(X_test_f, y_test)
     model_results["rule"] = rule_metrics
     _log(f"    F1: {rule_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("rule", rule_metrics)
 
     # Baseline 2: XGBoost
     _log("  Training: XGBoost (Baseline 2)...")
     xgb_metrics = _train_and_evaluate_xgb(X_train_f, y_train, X_test_f, y_test)
     model_results["xgb"] = xgb_metrics
     _log(f"    F1: {xgb_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("xgb", xgb_metrics)
 
     # Primary: LSTM
     _log("  Training: LSTM (Primary)...")
@@ -285,6 +311,7 @@ def run_full_experiment_suite(
     )
     model_results["lstm"] = lstm_metrics
     _log(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("lstm", lstm_metrics)
 
     # Ablation: GRU
     _log("  Training: GRU (Ablation)...")
@@ -293,6 +320,7 @@ def run_full_experiment_suite(
     )
     model_results["gru"] = gru_metrics
     _log(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("gru", gru_metrics)
 
     # ── 3. Ablation studies ────────────────────────────────────────────
     _log("\n  Running ablation studies...")

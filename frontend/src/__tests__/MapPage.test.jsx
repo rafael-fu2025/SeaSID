@@ -140,4 +140,30 @@ describe('Map page', () => {
     expect(lockToggle.textContent).toMatch(/Lock map/);
     expect(lockToggle.textContent).not.toMatch(/[\u{1F512}\u{1F513}]/u);
   });
+
+  it('re-fetches every site forecast when the global seasid:refresh event fires', async () => {
+    render(<MemoryRouter><MapPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(screen.getByTestId('map-site-list')).toBeInTheDocument();
+    });
+    const callsBefore = api.getForecast.mock.calls.length;
+    expect(callsBefore).toBeGreaterThan(0);
+
+    // Swap the forecast mock to a different payload so we can prove the
+    // refresh burst landed a second fetch.
+    api.getForecast.mockResolvedValueOnce({
+      hours: [
+        { ts: '2026-07-09T01:00:00+00:00', p_bad: 0.92, viz_label: 'Poor', current_risk: 'High', risk: 'HIGH' },
+      ],
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('seasid:refresh'));
+    });
+
+    // Two sites × at least two fetches each (mount + refresh).
+    await waitFor(() => {
+      expect(api.getForecast.mock.calls.length).toBeGreaterThan(callsBefore + 1);
+    });
+  });
 });

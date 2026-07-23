@@ -14,6 +14,7 @@ Endpoints:
   GET  /api/v1/agent/briefing      — Auto-generated briefing
   GET  /api/v1/experiments/results — Experiment results
   POST /api/v1/experiments/run     — Trigger experiment suite + reload model
+  POST /api/v1/experiments/run/stream — SSE variant of /run with live progress
 """
 
 from __future__ import annotations
@@ -673,3 +674,193 @@ def run_experiments():
     except Exception as exc:
         logger.error("Experiment run error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/v1/experiments/run/stream")
+async def run_experiments_stream(
+    principal: Principal = Depends(get_current_principal),
+):
+    """SSE variant of ``POST /experiments/run`` — streams progress + per-model
+    metrics so the Experiments page can show the suite running live.
+
+    Wire format (newline-delimited SSE, ``data: {json}\\n\\n`` per frame):
+
+      - ``{type: "status", stage: "loading"|"running"|"complete", samples: int}``
+        — high-level lifecycle events. ``samples`` is the total label count.
+      - ``{type: "log", line: str}`` — one human-readable step line, mirroring
+        what ``scripts/run_experiments.py`` prints to stdout.
+      - ``{type: "metric", model: str, accuracy?, precision?, recall?, f1?, auc_roc?}``
+        — one frame per model (rule, xgb, lstm, gru) emitted as soon as that
+        model's metrics are available, so the comparison table fills in
+        row-by-row instead of waiting for the whole suite.
+      - ``{type: "done", best_model: str, results: dict}`` — terminal event.
+        Same payload shape as ``POST /experiments/run``.
+      - ``{type: "error", message: str}`` — terminal event when the suite
+        can't start (e.g. no labels) or raises mid-run.
+
+    The label fetch and the experiment suite itself are CPU-bound and
+    synchronous; we run them in a daemon worker thread so the asyncio
+    event loop stays responsive (and the SSE stream keeps flushing) for
+    the duration of the multi-minute training run. Side effects
+    (``model.reload()`` + ``invalidate_forecast_cache``) match the
+    blocking endpoint so the dashboard picks up the new bundle either way.
+    """
+    import asyncio
+    import threading
+    from datetime import date, datetime, timezone
+
+    import numpy as np
+    import pandas as pd
+
+    from app.lib import db as _db_lib
+    from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
+    from app.lib.scoring import label_to_binary
+    from app.lib.experiments import run_full_experiment_suite
+
+    logger.info("Experiments SSE stream started by %s", principal.username)
+
+    async def event_generator():
+        # ── 1. Pull labels from the DB (sync, but cheap) ─────────────────
+        try:
+            db = _db_lib.SessionLocal()
+            try:
+                labels = db.query(_db_lib.NoDiveLabel).all()
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.error("Experiments stream DB error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Database error: {exc}'})}\n\n"
+            return
+
+        if not labels:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No labels in database. Run seed_history.py first.'})}\n\n"
+            return
+
+        # ── 2. Build the feature matrices (sync; same as /experiments/run)
+        try:
+            X_rows, y_vals, X_seqs = [], [], []
+            label_dates: list[date] = []
+            label_site_keys: list[str] = []
+            for lbl in labels:
+                target_ts = datetime(
+                    lbl.date.year, lbl.date.month, lbl.date.day,
+                    12, 0, 0, tzinfo=timezone.utc,
+                )
+                try:
+                    feat_df = build_features(lbl.site_key, target_ts)
+                    X_rows.append(feat_df.values[0])
+                    X_seqs.append(build_sequence(lbl.site_key, target_ts, window_hours=24))
+                    y_vals.append(label_to_binary(lbl.label))
+                    label_dates.append(lbl.date)
+                    label_site_keys.append(lbl.site_key)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.error("Experiments stream feature build error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Feature build failed: {exc}'})}\n\n"
+            return
+
+        n_samples = len(X_rows)
+        # Loading → running transitions mirror the page's runStage state.
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'loading', 'samples': n_samples})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'running', 'samples': n_samples})}\n\n"
+
+        X_flat = pd.DataFrame(X_rows, columns=FEATURE_COLUMNS)
+        y = pd.Series(y_vals, name="label")
+        X_seq = np.array(X_seqs, dtype=np.float32)
+        y_arr = np.array(y_vals, dtype=np.float32)
+
+        # ── 3. Run the suite in a worker thread; bridge sync callbacks ────
+        #        back into the asyncio event loop via an asyncio.Queue.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _enqueue(event: dict) -> None:
+            # call_soon_threadsafe is the only safe way to hand a value
+            # to an asyncio.Queue from a non-asyncio thread.
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        def progress_callback(msg: str) -> None:
+            _enqueue({"type": "log", "line": msg})
+
+        def metric_callback(model_key: str, metrics: dict) -> None:
+            # Flatten the metrics dict into the SSE payload so the page
+            # can drop it straight into the model_comparison table.
+            payload = {"type": "metric", "model": model_key}
+            for key in ("accuracy", "precision", "recall", "f1", "auc_roc"):
+                if key in metrics and metrics[key] is not None:
+                    payload[key] = metrics[key]
+            _enqueue(payload)
+
+        def run_in_thread() -> None:
+            try:
+                results = run_full_experiment_suite(
+                    X_flat, y, X_seq, y_arr,
+                    label_dates=label_dates,
+                    label_site_keys=label_site_keys,
+                    progress_callback=progress_callback,
+                    metric_callback=metric_callback,
+                )
+                _enqueue({"type": "_done", "results": results})
+            except Exception as exc:
+                logger.exception("Experiments stream suite error")
+                _enqueue({"type": "_error", "message": str(exc)})
+            finally:
+                # Sentinel so the consumer loop always terminates even if
+                # the producer thread somehow exits without _done/_error.
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "_eof"})
+
+        threading.Thread(target=run_in_thread, daemon=True).start()
+
+        # ── 4. Drain the queue into SSE frames until the suite ends. ──────
+        while True:
+            event = await queue.get()
+            kind = event.get("type")
+
+            if kind == "_eof":
+                break
+
+            if kind == "_done":
+                results = event["results"]
+                # Same side effects as POST /experiments/run: reload the
+                # cached ML bundle + invalidate the per-site forecast cache.
+                try:
+                    from app.lib.model import reload as model_reload
+                    model_reload()
+                    logger.info("Model reloaded after experiments.run/stream")
+                except Exception as exc:
+                    logger.warning("Model reload failed after experiments.run/stream: %s", exc)
+                try:
+                    from app.api.services import invalidate_forecast_cache
+                    invalidate_forecast_cache(None)
+                except Exception as exc:
+                    logger.warning("Forecast cache invalidation failed: %s", exc)
+
+                # Build the payload as a local dict first so the f-string
+                # stays single-line — multi-line expressions inside f-string
+                # braces require Python 3.12+.
+                done_payload = {
+                    "type": "done",
+                    "best_model": results.get("best_model", "unknown"),
+                    "results": results,
+                }
+                yield f"data: {json.dumps(done_payload, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'complete', 'samples': n_samples})}\n\n"
+                continue
+
+            if kind == "_error":
+                yield f"data: {json.dumps({'type': 'error', 'message': event['message']})}\n\n"
+                continue
+
+            # Forward ``log`` / ``metric`` frames verbatim.
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+            "Connection": "keep-alive",
+        },
+    )

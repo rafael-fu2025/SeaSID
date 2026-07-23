@@ -1,16 +1,50 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
-  Send,
+  ArrowUp,
   Square,
-  Paperclip,
-  X,
-  CornerDownLeft,
-  CornerDownRight,
+  Plus,
+  Image as ImageIcon,
+  FileText,
+  FileIcon,
+  X as XIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+
+const IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
+const PDF_MIMES = new Set(['application/pdf']);
+
+function classifyAttachment(mime) {
+  if (IMAGE_MIMES.has(mime)) return 'image';
+  if (PDF_MIMES.has(mime)) return 'pdf';
+  return 'other';
+}
+
+function iconFor(kind) {
+  switch (kind) {
+    case 'image':
+      return ImageIcon;
+    case 'pdf':
+      return FileText;
+    default:
+      return FileIcon;
+  }
+}
+
+function humanSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
 
 /**
  * ChatComposer — the input bar at the bottom of the agent sheet.
@@ -57,14 +91,71 @@ const ChatComposer = forwardRef(function ChatComposer({
   onSend,
   onStop,
   busy = false,
-  siteKey,
   placeholder = 'Ask the agent…',
   maxRows = 6,
 }, ref) {
 
   const taRef = useRef(null);
+  const photoInputRef = useRef(null);
+  const documentInputRef = useRef(null);
   const [isFocused, setIsFocused] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  // Local state for the attachment menu. Radix DropdownMenu was being
+  // clipped by the Sheet container and the synthetic click event was
+  // being swallowed, so the native popover pattern keeps the menu
+  // visible and the file pickers responsive.
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  // Track files the operator attached through the menu or drag/drop.
+  // Each entry mirrors the reference AttachmentList shape: an id, the
+  // raw File, a mime, a kind, and a previewUrl when we can build one.
+  // The chip strip is rendered above the textarea; we no longer append
+  // a `[file: name]` text stub because the chip itself is the source of
+  // truth for the attachment.
+  const [attachments, setAttachments] = useState([]);
+  const removeAttachment = (id) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const attachFile = (file) => {
+    if (!file) return;
+    const id = `${file.name}:${file.size}:${file.lastModified}:${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const kind = classifyAttachment(file.type || '');
+    const previewUrl =
+      kind === 'image' && typeof URL !== 'undefined' && URL.createObjectURL
+        ? URL.createObjectURL(file)
+        : undefined;
+    setAttachments((prev) => [
+      ...prev,
+      { id, name: file.name, mime: file.type || '', size: file.size, kind, previewUrl, file },
+    ]);
+  };
+
+  const handlePhoto = (event) => {
+    const file = event.target.files?.[0];
+    attachFile(file);
+    if (photoInputRef.current) photoInputRef.current.value = '';
+  };
+  const handleDocument = (event) => {
+    const file = event.target.files?.[0];
+    attachFile(file);
+    if (documentInputRef.current) documentInputRef.current.value = '';
+  };
+
+  // Close the attachment menu when the operator clicks anywhere outside
+  // it (matches the reference MultimodalComposer behavior).
+  useEffect(() => {
+    if (!isMenuOpen) return undefined;
+    const handleOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setIsMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutside);
+    return () => window.removeEventListener('mousedown', handleOutside);
+  }, [isMenuOpen]);
 
   // Auto-grow the textarea as the user types. We measure scrollHeight
   // after every value change and clamp to maxRows-worth of pixels.
@@ -131,6 +222,13 @@ const ChatComposer = forwardRef(function ChatComposer({
     }
   };
 
+  // Bypass the Tooltip wrapper when firing the send action so the
+  // synthetic click from TooltipTrigger asChild never steals the
+  // pointer event away from the underlying button.
+  const handleSendClick = () => {
+    if (canSend) onSend();
+  };
+
   // Drag-and-drop support: a file dropped onto the composer becomes
   // an @-mention-style stub. Files aren't uploaded yet (the agent
   // doesn't accept attachments) but we surface the affordance so the
@@ -155,13 +253,6 @@ const ChatComposer = forwardRef(function ChatComposer({
     onChange((value ? value.trimEnd() + ' ' : '') + `[file: ${names}] `);
   };
 
-  // Word + character count, shown in the meta row. Cheap, debounced
-  // implicitly by React's render cycle.
-  const charCount = value.length;
-  const wordCount = value.trim() === '' ? 0 : value.trim().split(/\s+/).length;
-  const charLimit = 2000;
-  const overLimit = charCount > charLimit;
-
   return (
     <div
       data-testid="agent-composer"
@@ -178,25 +269,131 @@ const ChatComposer = forwardRef(function ChatComposer({
         busy && 'opacity-90',
       )}
     >
-      <div className="flex items-end gap-2 p-2.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 text-muted-foreground"
-              disabled
-              aria-label="Attach file (coming soon)"
-              data-testid="agent-attach"
+      <div className="flex flex-col gap-2 p-2.5">
+        {attachments.length > 0 && (
+          <div
+            className="flex flex-wrap gap-2"
+            role="list"
+            aria-label="Attachments"
+            data-testid="agent-attachments"
+          >
+            {attachments.map((a) => {
+              const IconCmp = iconFor(a.kind);
+              return (
+                <div
+                  key={a.id}
+                  role="listitem"
+                  data-testid="agent-attachment"
+                  data-kind={a.kind}
+                  className="flex w-full max-w-full items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1 text-xs text-foreground"
+                  title={`${a.name} (${humanSize(a.size)})`}
+                >
+                  {a.kind === 'image' && a.previewUrl ? (
+                    <img
+                      src={a.previewUrl}
+                      alt=""
+                      aria-hidden
+                      className="size-8 shrink-0 rounded object-cover"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="flex size-8 shrink-0 items-center justify-center rounded bg-popover text-muted-foreground"
+                    >
+                      <IconCmp className="size-3.5" />
+                    </span>
+                  )}
+                  <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                    <span className="truncate font-medium" title={a.name}>
+                      {a.name}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {humanSize(a.size)}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove ${a.name}`}
+                    data-testid="agent-attachment-remove"
+                    className="size-6 shrink-0 rounded-full"
+                    onClick={() => removeAttachment(a.id)}
+                  >
+                    <XIcon className="size-3" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+        <div ref={menuRef} className="relative shrink-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Attach file"
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+            data-testid="agent-attach"
+            onClick={() => setIsMenuOpen((value) => !value)}
+          >
+            <Plus className="size-4" />
+          </Button>
+          {isMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Upload"
+              className="absolute bottom-full left-0 z-50 mb-2 w-44 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
             >
-              <Paperclip className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            Attachments coming soon — drop a file to mention it for now
-          </TooltipContent>
-        </Tooltip>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  photoInputRef.current?.click();
+                }}
+                data-testid="agent-attach-photo"
+                className="flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground"
+              >
+                <ImageIcon className="size-3.5" aria-hidden />
+                <span>Upload photo</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  documentInputRef.current?.click();
+                }}
+                data-testid="agent-attach-document"
+                className="flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground"
+              >
+                <FileText className="size-3.5" aria-hidden />
+                <span>Upload document</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handlePhoto}
+          data-testid="agent-attach-photo-input"
+        />
+        <input
+          ref={documentInputRef}
+          type="file"
+          accept=".pdf,.doc,.docx,.txt,.csv,.md,application/pdf,text/plain,text/csv"
+          className="hidden"
+          onChange={handleDocument}
+          data-testid="agent-attach-document-input"
+        />
 
         <div className="min-w-0 flex-1">
           <textarea
@@ -228,7 +425,7 @@ const ChatComposer = forwardRef(function ChatComposer({
                 type="button"
                 onClick={onStop}
                 size="icon"
-                className="size-8 shrink-0 bg-danger text-danger-foreground hover:bg-danger/90"
+                className="size-8 shrink-0 rounded-full bg-danger text-danger-foreground hover:bg-danger/90"
                 aria-label="Stop generating"
                 data-testid="agent-stop"
               >
@@ -242,64 +439,25 @@ const ChatComposer = forwardRef(function ChatComposer({
             <TooltipTrigger asChild>
               <Button
                 type="button"
-                onClick={onSend}
+                onClick={handleSendClick}
                 disabled={!canSend}
                 size="icon"
                 className={cn(
-                  'size-8 shrink-0 transition-all',
+                  'size-8 shrink-0 rounded-full transition-all',
                   canSend
-                    ? 'bg-reef text-white shadow-sm hover:bg-reef/90'
+                    ? 'bg-foreground text-background shadow-sm hover:bg-foreground/90'
                     : 'bg-muted text-muted-foreground',
                 )}
                 aria-label="Send message"
                 data-testid="agent-send"
               >
-                <Send className="size-3.5" />
+                <ArrowUp className="size-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">Send (Enter)</TooltipContent>
           </Tooltip>
         )}
-      </div>
-
-      <div
-        className={cn(
-          'flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 text-[11px]',
-          'text-muted-foreground',
-        )}
-      >
-        <div className="flex items-center gap-2">
-          {siteKey && (
-            <Badge
-              variant="outline"
-              className="font-mono text-[10px] text-muted-foreground"
-              data-testid="agent-composer-site"
-            >
-              {siteKey}
-            </Badge>
-          )}
-          {isDragOver ? (
-            <span className="text-reef">Drop file to attach</span>
-          ) : (
-            <span className="hidden sm:inline-flex items-center gap-1">
-              <CornerDownLeft className="size-3" aria-hidden />
-              <span>send</span>
-              <span className="text-muted-foreground/50">·</span>
-              <CornerDownRight className="size-3" aria-hidden />
-              <span>newline</span>
-            </span>
-          )}
         </div>
-        <span
-          className={cn(
-            'tabular-nums',
-            overLimit && 'text-danger',
-            charCount > 0 && charCount > charLimit * 0.8 && !overLimit && 'text-amber-500',
-          )}
-          data-testid="agent-char-count"
-        >
-          {wordCount} {wordCount === 1 ? 'word' : 'words'} · {charCount}/{charLimit}
-        </span>
       </div>
     </div>
   );

@@ -72,25 +72,7 @@ describe('AgentFab', () => {
     expect(screen.getByTestId('agent-send')).toBeInTheDocument();
   });
 
-  it('composer hint matches actual behaviour (Enter to send, Shift+Enter for newline)', () => {
-    renderFab();
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    // The composer shows the keyboard hint via the inline kbd
-    // affordance rather than a single text string. Verify the
-    // "send" + "newline" hints are present, and that the tooltip
-    // on the send button is the canonical "Send (Enter)" label.
-    expect(screen.getByText(/^send$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^newline$/i)).toBeInTheDocument();
-    expect(screen.getByTestId('agent-send')).toHaveAttribute('aria-label', 'Send message');
-  });
-
-  it('composer shows the current site as a chip so the user knows the context', () => {
-    renderFab();
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    const chip = screen.getByTestId('agent-composer-site');
-    expect(chip).toBeInTheDocument();
-    expect(chip.textContent).toMatch(/dauin_muck/);
-  });
+});
 
   it('shows a Stop button while streaming that aborts the in-flight request', async () => {
     // Stream that respects the AbortSignal: when aborted, the finally
@@ -134,16 +116,6 @@ describe('AgentFab', () => {
       target: { value: 'line one\nline two\nline three\nline four' },
     });
     expect(ta.style.height).not.toBe('');
-  });
-
-  it('shows a character + word counter that updates as the user types', () => {
-    renderFab();
-    fireEvent.click(screen.getByTestId('agent-fab'));
-    const ta = screen.getByTestId('agent-input');
-    fireEvent.change(ta, { target: { value: 'hello world' } });
-    const counter = screen.getByTestId('agent-char-count');
-    expect(counter.textContent).toMatch(/2 words/);
-    expect(counter.textContent).toMatch(/11\/2000/);
   });
 
   it('auto-focuses the textarea when the sheet opens', async () => {
@@ -310,4 +282,3 @@ describe('AgentFab', () => {
     expect(await screen.findByTestId('thinking-block')).toBeInTheDocument();
     expect(await screen.findByText(/it looks good today/i)).toBeInTheDocument();
   });
-});
