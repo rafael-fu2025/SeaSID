@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -18,6 +19,19 @@ from dotenv import load_dotenv
 from app.lib.agent_tools import get_active_tool_definitions
 
 logger = logging.getLogger(__name__)
+
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
+_THINK_DANGLING_RE = re.compile(r"<think\b[^>]*>.*$", re.IGNORECASE | re.DOTALL)
+_THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
+
+
+def strip_internal_thoughts(content: str | None) -> str:
+    """Remove provider reasoning blocks before content is stored or returned."""
+    if not content:
+        return ""
+    cleaned = _THINK_BLOCK_RE.sub("", content)
+    cleaned = _THINK_DANGLING_RE.sub("", cleaned)
+    return _THINK_TAG_RE.sub("", cleaned).strip()
 
 load_dotenv()
 
@@ -101,16 +115,26 @@ def _now_reminder() -> str:
 
 
 def _resolve_llm_runtime():
-    """Load the next rotating LLM key and shared base URL from the database."""
+    """Resolve the LLM key from encrypted storage, then deployment env."""
     try:
         from app.lib import provider_keys
 
         key_record = provider_keys.pick_provider_key("llm")
         config = provider_keys.get_provider_config("llm")
-        return provider_keys, key_record, config.get("base_url")
+        if key_record is not None:
+            return provider_keys, key_record, config.get("base_url")
     except Exception as exc:
         logger.warning("Could not resolve database-backed LLM configuration: %s", exc)
-        return None, None, None
+
+    # Environment variables are a deployment/bootstrap fallback. Database
+    # credentials remain preferred because they support rotation and auditing.
+    from types import SimpleNamespace
+
+    env_key = (os.getenv("OPENAI_API_KEY") or os.getenv("MINIMAX_API_KEY") or "").strip()
+    if env_key:
+        base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or None
+        return None, SimpleNamespace(id=None, value=env_key), base_url
+    return None, None, None
 
 
 async def _guard_stream(response, provider_keys, key_id: int):
@@ -227,7 +251,7 @@ async def chat(
 
         # If no tool calls, we have the final response
         if choice.finish_reason == "stop" or not choice.message.tool_calls:
-            assistant_content = choice.message.content or ""
+            assistant_content = strip_internal_thoughts(choice.message.content)
             _save_message(conversation_id, "assistant", assistant_content, owner_id=owner_id)
 
             return {
@@ -295,6 +319,7 @@ async def generate_briefing(site_key: str, owner_id: str | None = None) -> dict:
     )
 
     result = await chat(prompt, site_key=site_key, owner_id=owner_id)
+    result["response"] = strip_internal_thoughts(result.get("response"))
     result["site_key"] = site_key
     result["type"] = "briefing"
     return result

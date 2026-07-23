@@ -19,7 +19,6 @@ from app.lib.scoring import (
     score_hour,
     risk_label,
     features_dict_from_row,
-    p_bad_from_rules,
 )
 from app.lib.sites import get_site, site_keys
 from app.lib.model import load_best, predict, get_model_type
@@ -217,27 +216,17 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
             elif viz != "Unknown":
                 p_bad = predict(bundle, site_key, target_ts)
         except Exception as exc:
-            # ML predict crashed (e.g. feature-schema mismatch). Fall back
-            # to the rule-based scorer — it works on the same feature dict
-            # we just built, so the result is consistent with the agent.
-            if viz != "Unknown" and rl is not None:
-                p_bad = p_bad_from_rules(feat_dict)
-                source = "rules_fallback"
-                fallback_hours += 1
-                degraded_reason = (
-                    f"ml_predict_failed: {type(exc).__name__}"
-                )
-                logger.info(
-                    "predict(%s) failed (%s) — using rules fallback p_bad=%.3f",
-                    model_type_str, exc, p_bad,
-                )
+            # Keep the configured LSTM as the prediction source. The neutral
+            # value is explicitly marked degraded instead of switching models.
+            fallback_hours += 1
+            degraded_reason = f"lstm_predict_failed: {type(exc).__name__}"
+            logger.warning("LSTM prediction failed for %s: %s", target_ts, exc)
         else:
             # If the batch predict for the whole window failed and we
             # still got an individual ML number here, treat it as a fallback.
             if batched_failure is not None and viz != "Unknown":
-                source = "rules_fallback"
                 fallback_hours += 1
-                degraded_reason = f"ml_predict_failed: {batched_failure}"
+                degraded_reason = f"lstm_batch_failed: {batched_failure}"
 
         forecast_hours.append({
             "ts": target_ts.isoformat(),
@@ -298,15 +287,8 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     else:
         data_as_of = now.isoformat()
 
-    # If every hour needed a fallback, surface that at the top level so the
-    # UI can render a single "model unavailable, using rules" banner instead
-    # of 48 identical chips.
-    if forecast_hours and fallback_hours == len(forecast_hours):
-        forecast_source = "rules_fallback"
-    elif fallback_hours > 0:
-        forecast_source = f"{model_type_str}+rules_fallback"
-    else:
-        forecast_source = model_type_str
+    # The configured source remains LSTM even when an hour is degraded.
+    forecast_source = model_type_str
 
     out = {
         "site_key": site_key,

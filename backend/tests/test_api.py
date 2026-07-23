@@ -73,8 +73,8 @@ class TestForecastEndpoint:
         assert data["site_key"] == "dauin_muck"
         assert "hours" in data
         assert len(data["hours"]) > 0
-        assert data["ml_bundle_loaded"] is False
-        assert data["forecast_source"] == "rule_based"
+        assert data["ml_bundle_loaded"] is True
+        assert data["forecast_source"] == "lstm"
 
     async def test_forecast_invalid_site(self):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

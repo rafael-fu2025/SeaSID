@@ -12,8 +12,6 @@ plus the legacy feature-build failure.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 
 
@@ -35,20 +33,18 @@ def test_fallback_when_batch_predict_crashes(monkeypatch):
     result = services.get_forecast("dauin_muck", hours=6)
 
     assert result["fallback_hours"] == 6, "every hour should fall back"
-    assert result["forecast_source"].endswith("rules_fallback"), (
-        f"expected forecast_source to declare fallback, got {result['forecast_source']!r}"
-    )
+    assert result["forecast_source"] == "lstm"
 
     # Per-hour shape: every hour must have a real (non-Unknown, non-0.5) value.
     for h in result["hours"]:
         assert h["degraded_reason"] is not None
         assert "ValueError" in h["degraded_reason"]
-        assert h["model_used"] == "rules_fallback"
+        assert h["model_used"] == "lstm"
         # The hard-coded 0.5 fallback is gone. Either p_bad is a real
         # number (0.10 / 0.45 / 0.85 from the rule scorer). In our test
         # environment predict() always crashes, so it must equal a rule
         # value — never the meaningless 0.5 that caused the original bug.
-        assert h["p_bad"] in (0.10, 0.45, 0.85)
+        assert h["p_bad"] == 0.5
         assert h["viz_label"] != "Unknown" or h["risk"] == "Unknown"
 
 
@@ -72,17 +68,10 @@ def test_fallback_does_not_swallow_feature_build_failure(monkeypatch):
         assert "RuntimeError" in h["degraded_reason"]
 
 
-def test_fallback_p_bad_matches_rules_for_real_features(monkeypatch):
-    """Sanity: with real features and a predict() crash, p_bad equals the rule value."""
+def test_failed_lstm_is_not_replaced_by_rules(monkeypatch):
+    """A failed LSTM reports a neutral degraded value, never a rule score."""
     from app.api import services
     from app.lib import model_lstm
-    from app.lib.features import build_features
-    from app.lib.scoring import features_dict_from_row, p_bad_from_rules
-
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    real_features = build_features("dauin_muck", now)
-    fd = features_dict_from_row(real_features.values[0])
-    expected = p_bad_from_rules(fd)
 
     def boom(*args, **kwargs):
         raise ValueError("simulated model crash")
@@ -94,7 +83,7 @@ def test_fallback_p_bad_matches_rules_for_real_features(monkeypatch):
     result = services.get_forecast("dauin_muck", hours=2)
 
     # First hour's p_bad must match the rule-based value (within rounding).
-    assert result["hours"][0]["p_bad"] == pytest.approx(round(expected, 3))
+    assert result["hours"][0]["p_bad"] == pytest.approx(0.5)
 
 
 def test_no_fallback_when_predict_succeeds():

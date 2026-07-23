@@ -50,14 +50,17 @@ export function ForecastProvenance({
   return (
     <div
       className={cn(
-        'rounded-md border border-border bg-card/40 p-3 text-xs text-foreground',
+        'grid grid-cols-1 rounded-md border border-border bg-card/40 p-3 text-xs text-foreground md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]',
         compact && 'p-2 text-[11px]',
         className,
       )}
       data-testid="forecast-provenance"
     >
       {/* ── Data sources ──────────────────────────────────────────────── */}
-      <section data-testid="provenance-section-sources">
+      <section
+        className="min-w-0 md:border-r md:border-border md:pr-4"
+        data-testid="provenance-section-sources"
+      >
         <h3 className={sectionTitleCx}>
           <Sparkles className="size-3 text-reef" aria-hidden />
           Data sources
@@ -65,11 +68,11 @@ export function ForecastProvenance({
         {freshness.length === 0 ? (
           <p className="text-muted-foreground">No source data reported.</p>
         ) : (
-          <ul className={cn('grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2', compact && 'sm:grid-cols-2')}>
+          <ul className="grid grid-cols-2 gap-1.5 xl:grid-cols-3">
             {freshness.map((f) => (
               <li
                 key={f.source}
-                className="flex items-center justify-between gap-2"
+                className="flex min-w-0 items-center justify-between gap-2 rounded border border-border/70 bg-background/50 px-2 py-1.5"
                 data-testid={`provenance-source-${f.source}`}
               >
                 <span className="font-medium capitalize text-foreground/80">{f.source}</span>
@@ -80,15 +83,18 @@ export function ForecastProvenance({
         )}
       </section>
 
-      <Separator className="my-3" />
+      <Separator className="my-3 md:hidden" />
 
       {/* ── Forecast metadata ───────────────────────────────────────── */}
-      <section data-testid="provenance-section-metadata">
+      <section
+        className="min-w-0 md:pl-4"
+        data-testid="provenance-section-metadata"
+      >
         <h3 className={sectionTitleCx}>
           <Cpu className="size-3 text-reef" aria-hidden />
           Forecast metadata
         </h3>
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
           <dt className="text-muted-foreground">Data as of</dt>
           <dd className="font-mono tabular-nums text-foreground" data-testid="provenance-data-as-of">
             <Clock className="mr-1 inline-block size-3 align-text-bottom text-muted-foreground" aria-hidden />
@@ -111,7 +117,7 @@ export function ForecastProvenance({
                 className="font-mono text-foreground"
                 data-testid="provenance-providers"
               >
-                <ul className="space-y-0.5">
+                <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
                   {providerEntries.map(([role, name]) => (
                     <li key={role} className="flex items-baseline gap-2">
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">

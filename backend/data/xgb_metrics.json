@@ -1,1 +1,11 @@
-{"auc_roc": 0.75, "n_samples": 600, "cv_accuracy": 0.75}
+{
+  "cv_accuracy": 0.704,
+  "cv_accuracy_std": 0.09233890820872588,
+  "cv_f1": 0.8208259696084592,
+  "cv_f1_std": 0.07276064361993237,
+  "auc_roc": 0.8969428444838281,
+  "mode": "cv",
+  "n_samples": 246,
+  "n_positive": 185,
+  "n_negative": 61
+}

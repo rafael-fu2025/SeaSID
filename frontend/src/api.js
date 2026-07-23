@@ -134,7 +134,8 @@ export const api = {
   getAgentTools: () => request('/api/v1/agent/tools'),
 
   // Forecast
-  getForecast: (siteKey) => request(`/api/v1/forecast?site=${siteKey}`),
+  getForecast: (siteKey, hours = 48) =>
+    request(`/api/v1/forecast?site=${siteKey}&hours=${hours}`),
 
   // Labels
   getLabels: (siteKey = 'all', limit = 50) =>

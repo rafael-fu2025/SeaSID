@@ -31,7 +31,7 @@ from typing import Literal
 
 import pandas as pd
 
-from app.lib.features import build_features, build_sequence
+from app.lib.features import build_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +87,12 @@ def _bundle_qualifies(bundle: dict, min_samples: int, min_auc: float, metrics: d
     return True, f"n_samples={n_samples}, auc={float(auc):.3f}"
 
 
-def load_best() -> dict | None:
+def load_best() -> dict:
     """
     Phase 3: tiered model selection.
 
-    Returns the best qualifying bundle, or ``None`` if no model meets its
-    tier gate (caller falls back to rule-based scoring).
+    Returns the persisted LSTM bundle. Missing LSTM artifacts fail loudly;
+    production inference never switches to XGBoost or rule-based scoring.
     """
     global _cached_bundle, _selected_tier, _selection_reason
     global _lstm_rejection_reason, _xgb_rejection_reason
@@ -107,6 +107,22 @@ def load_best() -> dict | None:
     # Lazy imports avoid a circular import at module load.
     from app.lib.model_lstm import load_lstm
     from app.lib.model_xgb import load_xgb
+    # Production forecasts use LSTM exclusively. A missing artifact is a
+    # deployment error, not a reason to silently switch prediction models.
+    lstm_bundle = load_lstm(LSTM_MODEL_PATH)
+    if lstm_bundle is None:
+        _selected_tier = "lstm"
+        _selection_reason = "production LSTM bundle is missing"
+        _lstm_rejection_reason = f"lstm: no bundle at {LSTM_MODEL_PATH}"
+        raise RuntimeError(f"Production LSTM bundle not found: {LSTM_MODEL_PATH}")
+
+    _cached_bundle = lstm_bundle
+    _selected_tier = "lstm"
+    _selection_reason = "production model configured as LSTM"
+    _lstm_rejection_reason = None
+    _xgb_rejection_reason = "xgboost: disabled for production inference"
+    logger.info("Production model selected: LSTM")
+    return _cached_bundle
 
     # ── Tier 1: LSTM ────────────────────────────────────────────────
     lstm_bundle = load_lstm(LSTM_MODEL_PATH)
@@ -226,10 +242,7 @@ def predict(bundle: dict | None, site_key: str, target_ts: datetime) -> float:
     unchanged.
     """
     if bundle is None:
-        from app.lib.scoring import p_bad_from_rules, features_dict_from_row
-        feat_df = build_features(site_key, target_ts)
-        feat_dict = features_dict_from_row(feat_df.values[0])
-        return p_bad_from_rules(feat_dict)
+        raise RuntimeError("LSTM model is required for production prediction")
 
     model_type = get_model_type(bundle)
 
@@ -238,16 +251,8 @@ def predict(bundle: dict | None, site_key: str, target_ts: datetime) -> float:
         seq = build_sequence(site_key, target_ts, window_hours=bundle.get("config", {}).get("seq_len", 24))
         proba = predict_proba_lstm(bundle, seq)
         raw = float(proba[0])
-    elif model_type == "xgboost":
-        from app.lib.model_xgb import predict_proba_xgb
-        feat_df = build_features(site_key, target_ts)
-        proba = predict_proba_xgb(bundle, feat_df)
-        raw = float(proba.iloc[0])
     else:
-        from app.lib.scoring import p_bad_from_rules, features_dict_from_row
-        feat_df = build_features(site_key, target_ts)
-        feat_dict = features_dict_from_row(feat_df.values[0])
-        return p_bad_from_rules(feat_dict)
+        raise RuntimeError(f"Unsupported production model type: {model_type}")
 
     # Phase 7: apply calibrator to the raw probability.
     cal = get_calibrator()

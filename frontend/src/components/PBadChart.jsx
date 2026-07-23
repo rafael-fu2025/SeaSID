@@ -66,7 +66,7 @@ const BAND_FILL = {
   low: 'fill-positive/10',
 };
 
-function PBadChart({ hours = [], optimalIso }) {
+function PBadChart({ hours = [], optimalIso, label = 'Probability of no-go · 12 hours' }) {
   const data = useMemo(() => buildSeries(hours, optimalIso), [hours, optimalIso]);
 
   return (
@@ -74,7 +74,7 @@ function PBadChart({ hours = [], optimalIso }) {
       <CardHeader className="pb-1">
         <CardTitle className="flex items-center gap-2 text-sm">
           <Activity className="size-4 text-reef" />
-          Probability of no-go · 12 hours
+          {label}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -89,7 +89,7 @@ function PBadChart({ hours = [], optimalIso }) {
               data-testid="pbad-chart-svg"
               className="h-48 w-full"
               role="img"
-              aria-label="12-hour P(no-go) chart"
+              aria-label={label}
             >
               {/* Risk-band backgrounds */}
               <rect
@@ -325,8 +325,9 @@ function buildSeries(hours, optimalIso) {
     };
   });
 
+  const labelStep = Math.max(1, Math.ceil(hours.length / 12));
   const xLabels = hours
-    .filter((_, i) => i % 2 === 0 || i === hours.length - 1 || hours[i].ts === optimalIso)
+    .filter((_, i) => i % labelStep === 0 || i === hours.length - 1 || hours[i].ts === optimalIso)
     .map((h) => {
       const i = hours.indexOf(h);
       return {

@@ -96,17 +96,17 @@ class TestAgentChat:
 
     @pytest.mark.asyncio
     async def test_chat_no_api_key(self, monkeypatch):
-        """Agent ignores environment credentials and requires a database key."""
+        """Environment credentials remain available as a deployment fallback."""
         import app.lib.agent as _agent
 
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key-must-be-ignored")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-fallback")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
 
-        result = await _agent.chat("Hello")
+        provider_store, key_record, base_url = _agent._resolve_llm_runtime()
 
-        assert "response" in result
-        assert "conversation_id" in result
-        # Should mention API key or configuration
-        assert "API key" in result["response"] or "not configured" in result["response"] or "not installed" in result["response"] 
+        assert provider_store is None
+        assert key_record.value == "sk-environment-fallback"
+        assert base_url == "https://example.test/v1"
 
     @pytest.mark.asyncio
     async def test_stream_uses_edited_database_key_and_base_url(self, monkeypatch):
