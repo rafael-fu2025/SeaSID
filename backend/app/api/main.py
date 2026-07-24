@@ -456,6 +456,8 @@ async def agent_chat(request: AgentChatRequest):
             user_message=request.message,
             conversation_id=request.conversation_id,
             site_key=request.site_key,
+            images=[img.model_dump() for img in request.images],
+            documents=[doc.model_dump() for doc in request.documents],
         )
         return AgentChatResponse(**result)
     except Exception as exc:
@@ -483,6 +485,8 @@ async def agent_chat_stream(request: AgentChatRequest):
             user_message=request.message,
             conversation_id=request.conversation_id,
             site_key=request.site_key,
+            images=[img.model_dump() for img in request.images],
+            documents=[doc.model_dump() for doc in request.documents],
         ):
             yield f"data: {json.dumps(event, default=str)}\n\n"
 
