@@ -25,39 +25,56 @@ function writeBool(key, value) {
   try {
     window.localStorage.setItem(key, value ? '1' : '0');
   } catch {
-    /* quota / private mode — silently ignore */
+    /* quota / private mode - silently ignore */
   }
 }
 
 export function useLayoutPrefs() {
-  const [leftCollapsed, setLeftCollapsed] = useState(() => readBool(KEYS.left, false));
+  const [leftCollapsed, setLeftCollapsedState] = useState(() =>
+    readBool(KEYS.left, false)
+  );
 
-  useEffect(() => { writeBool(KEYS.left, leftCollapsed); }, [leftCollapsed]);
+  useEffect(() => {
+    writeBool(KEYS.left, leftCollapsed);
+  }, [leftCollapsed]);
 
   // Multi-tab sync: listen for storage events from other tabs / windows.
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const onStorage = (e) => {
-      if (e.key === KEYS.left) setLeftCollapsed(readBool(KEYS.left, false));
+      if (e.key === KEYS.left) setLeftCollapsedState(readBool(KEYS.left, false));
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  const toggleLeft = useCallback(() => setLeftCollapsed((value) => !value), []);
+  const toggleLeft = useCallback(
+    () => setLeftCollapsedState((value) => !value),
+    []
+  );
+  // Imperative setter so callers (e.g. the Layout on a mobile -> desktop
+  // viewport transition) can snap the rail back to a known state without
+  // having to know about localStorage or implement their own toggle.
+  const setLeftCollapsed = useCallback(
+    (next) => setLeftCollapsedState(Boolean(next)),
+    []
+  );
   const reset = useCallback(() => {
-    setLeftCollapsed(false);
+    setLeftCollapsedState(false);
     if (typeof window !== 'undefined') {
       try {
         window.localStorage.removeItem(KEYS.left);
         LEGACY_KEYS.forEach((key) => window.localStorage.removeItem(key));
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
   }, []);
 
   return {
     leftCollapsed,
     toggleLeft,
+    setLeftCollapsed,
     reset,
   };
 }

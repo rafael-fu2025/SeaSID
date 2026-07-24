@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart } from '@/components/Skeleton';
+import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart, SkeletonProvenance, SkeletonOptimalWindow, SkeletonFooter } from '@/components/Skeleton';
 import ForecastCard from '@/components/ForecastCard';
 import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
@@ -191,12 +191,17 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Loading skeletons */}
+      {/* Loading skeletons — mirror the post-swap container order:
+          KPI strip → Probability chart → Forecast provenance →
+          Timeline grid → Optimal-window summary → Footer. */}
       {loading && !forecast && (
         <div className="flex flex-col gap-6">
           <SkeletonKpiStrip count={5} />
-          <SkeletonForecastGrid count={12} />
           <SkeletonChart />
+          <SkeletonProvenance />
+          <SkeletonForecastGrid count={12} />
+          <SkeletonOptimalWindow />
+          <SkeletonFooter />
         </div>
       )}
 
@@ -265,16 +270,12 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Provenance strip (roadmap #8) — answers "how old?", "which source?",
-          "which model?" from the same screen as the KPIs. */}
-      {!loading && forecast && (
-        <ForecastProvenance
-          dataAsOf={forecast.data_as_of}
-          freshness={forecast.freshness}
-          providers={forecast.providers}
-          modelVersion={forecast.model_version}
-          generatedAt={forecast.generated_at}
-          compact
+      {/* Probability chart */}
+      {!loading && visibleHours.length > 0 && (
+        <PBadChart
+          hours={visibleHours}
+          optimalIso={optimal?.ts}
+          label={`${windowHours}-hour probability of no-go`}
         />
       )}
 
@@ -354,12 +355,16 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Probability chart */}
-      {!loading && visibleHours.length > 0 && (
-        <PBadChart
-          hours={visibleHours}
-          optimalIso={optimal?.ts}
-          label={`${windowHours}-hour probability of no-go`}
+      {/* Provenance strip (roadmap #8) — answers "how old?", "which source?",
+          "which model?" from the same screen as the KPIs. */}
+      {!loading && forecast && (
+        <ForecastProvenance
+          dataAsOf={forecast.data_as_of}
+          freshness={forecast.freshness}
+          providers={forecast.providers}
+          modelVersion={forecast.model_version}
+          generatedAt={forecast.generated_at}
+          compact
         />
       )}
 

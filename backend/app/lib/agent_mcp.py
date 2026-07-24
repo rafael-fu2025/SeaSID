@@ -67,7 +67,19 @@ def _is_enabled() -> bool:
 
 def _resolve_uvx() -> str | None:
     """Locate the ``uvx`` binary (installed by the ``uv`` Python tool)."""
-    return shutil.which("uvx")
+    found = shutil.which("uvx")
+    if found:
+        return found
+    # Fallback: `uvx` may live in this venv's Scripts/ (drop-in copy) or
+    # in the system Python's Scripts/ that the venv was created from. The
+    # standard `shutil.which` lookup only walks PATH, so a relocated
+    # install wouldn't be found without this extra nudge.
+    import sys
+    if sys.prefix:
+        candidate = os.path.join(sys.prefix, "Scripts", "uvx.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 
 def _resolve_base_path() -> Path:

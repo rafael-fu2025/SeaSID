@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/theme/ThemeContext';
@@ -22,9 +22,23 @@ export default function Layout() {
   const {
     leftCollapsed,
     toggleLeft,
+    setLeftCollapsed,
   } = useLayoutPrefs();
   const isDesktop = useIsDesktop();
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Snap the desktop rail back to expanded when the viewport returns from
+  // mobile to the lg breakpoint. Without this, a leftCollapsed=true state
+  // persisted in localStorage from a prior desktop session survives an
+  // intervening mobile session and re-appears collapsed - resizing back
+  // out of mobile would otherwise feel stuck.
+  const prevDesktopRef = useRef(isDesktop);
+  useEffect(() => {
+    if (isDesktop && !prevDesktopRef.current) {
+      setLeftCollapsed(false);
+    }
+    prevDesktopRef.current = isDesktop;
+  }, [isDesktop, setLeftCollapsed]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -111,3 +125,5 @@ function MobileShell({ openAgent }) {
     </>
   );
 }
+
+

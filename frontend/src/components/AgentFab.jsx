@@ -425,9 +425,9 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
                 src="/diver.gif"
                 alt=""
                 aria-hidden
-                width={64}
-                height={64}
-                className="size-16 rounded-md object-contain"
+                width={128}
+                height={128}
+                className="size-32 rounded-lg object-contain"
               />
               <div>
                 <p className="text-sm font-medium text-foreground">No conversation yet</p>
@@ -455,7 +455,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           )}
         </div>
 
-        <div className="border-t border-border bg-card p-3">
+        <div className="bg-background p-3">
           <ChatComposer
             ref={composerRef}
             value={draft}

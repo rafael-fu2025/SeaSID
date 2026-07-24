@@ -260,7 +260,7 @@ const ChatComposer = forwardRef(function ChatComposer({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        'relative rounded-xl border bg-card transition-all',
+        'relative rounded-xl border bg-muted/40 transition-all',
         isDragOver
           ? 'border-reef ring-2 ring-reef/30 bg-reef/5'
           : isFocused
@@ -333,7 +333,7 @@ const ChatComposer = forwardRef(function ChatComposer({
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="size-8 shrink-0 rounded-full bg-black text-white dark:bg-white dark:text-black"
             aria-label="Attach file"
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
@@ -410,7 +410,7 @@ const ChatComposer = forwardRef(function ChatComposer({
             data-testid="agent-input"
             className={cn(
               'w-full resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-relaxed',
-              'placeholder:text-muted-foreground/70',
+              'placeholder:text-black/70 dark:placeholder:text-white/70',
               'focus:outline-none focus:ring-0',
               'disabled:cursor-not-allowed disabled:opacity-60',
               'text-foreground',

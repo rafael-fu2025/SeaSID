@@ -117,25 +117,22 @@ export function SidebarNav({
               data-testid={`nav-${label.toLowerCase()}`}
               className={({ isActive }) =>
                 cn(
-                  'group relative flex h-10 items-center rounded-none transition-colors',
-                  collapsed ? 'w-10 justify-center' : 'w-full gap-3 px-3',
+                  'group relative isolate flex flex-none items-center rounded-md transition-colors',
+                  collapsed
+                    ? 'size-8 h-8 w-8 justify-center self-center'
+                    : 'w-full h-10 gap-3 px-3',
                   'text-muted-foreground hover:bg-muted hover:text-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   isActive && 'bg-muted text-reef',
                 )
               }
             >
-              {({ isActive }) => (
-                <>
-                  <Icon className="size-4 shrink-0" />
-                  {!collapsed && (
-                    <span className="truncate text-sm">{label}</span>
-                  )}
-                  {!collapsed && isActive && (
-                    <span aria-hidden className="ml-auto size-1.5 rounded-full bg-reef" />
-                  )}
-                </>
-              )}
+              <>
+                <Icon className="size-4 shrink-0" />
+                {!collapsed && (
+                  <span className="truncate text-sm">{label}</span>
+                )}
+              </>
             </NavLink>
           );
           if (collapsed) {

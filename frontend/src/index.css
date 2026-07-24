@@ -11,6 +11,7 @@
    stock shadcn `.dark` class. Keeps parity with the existing
    ThemeContext that toggles `data-theme` on <html>. */
 @custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+@custom-variant dark  (&:where([data-theme="dark"],  [data-theme="dark"]  *));
 
 /* ─────────────────────────────────────────────────────────────────────────
    SeaSID palette (dark, default)
