@@ -17,6 +17,9 @@
    SeaSID palette (dark, default)
    ───────────────────────────────────────────────────────────────────────── */
 :root {
+  /* Tell the browser to render native UI (autofill, form controls, scrollbars)
+     in dark mode so Chrome doesn't wash fields out. */
+  color-scheme: dark;
   /* Surfaces — slightly tinted cool, feel "ocean" without saturated blues. */
   --background:        oklch(0.18 0.018 245);    /* page */
   --foreground:        oklch(0.94 0.012 245);    /* text-primary */
@@ -70,6 +73,7 @@
    Light theme — same tokens, ink-on-paper overrides.
    ───────────────────────────────────────────────────────────────────────── */
 [data-theme="light"] {
+  color-scheme: light;
   --background:        oklch(0.97 0.005 245);
   --foreground:        oklch(0.20 0.020 245);
 
@@ -181,6 +185,29 @@
   to   { height: 0 }
 }
 
+/* Login atmosphere — a very slow vertical drift on the decorative depth
+   contours. Deliberately subtle and motion-safe; disabled entirely when
+   the user prefers reduced motion. No pulsing/glowing. */
+@keyframes login-drift {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-22px); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .login-contours {
+    animation: login-drift 20s ease-in-out infinite alternate;
+  }
+}
+
+/* Login film-grain — a static, CSS-only fractal-noise overlay for a subtle
+   "premium" texture. No asset, no animation; very low opacity so it never
+   competes with the copy. Soft-light keeps it neutral across both themes. */
+.login-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  opacity: 0.045;
+  mix-blend-mode: soft-light;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Base / reset
    ───────────────────────────────────────────────────────────────────────── */
@@ -214,6 +241,24 @@
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--strong); background-clip: padding-box; }
+}
+
+/* Chrome/Safari force a light background on autofilled inputs, which in dark
+   mode washes the field out and makes light-colored adornments (e.g. the
+   password show/hide icon) vanish on hover. Mask the autofill background with
+   the theme background token so fields keep their themed look.
+   NOTE: kept OUTSIDE @layer so it wins over the Input's `shadow-xs` utility
+   (utilities layer would otherwise override the masking box-shadow, which is
+   why Chrome autofill still showed white). */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--foreground);
+  -webkit-box-shadow: 0 0 0 1000px var(--background) inset;
+  box-shadow: 0 0 0 1000px var(--background) inset;
+  caret-color: var(--foreground);
+  transition: background-color 9999s ease-out 0s;
 }
 
 /* ----------------------------------------------------------

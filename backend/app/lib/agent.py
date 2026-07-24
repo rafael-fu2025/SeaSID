@@ -151,11 +151,58 @@ async def _guard_stream(response, provider_keys, key_id: int):
             provider_keys.clear_provider_error(key_id)
 
 
+def _compose_user_message(
+    text: str,
+    images: list[dict] | None,
+    documents: list[dict] | None,
+) -> tuple[str | list[dict], str]:
+    """Build the current-turn user content for the LLM plus a text-only
+    representation for history.
+
+    - Text-like documents are inlined into the prompt as plain text.
+    - Images are attached as OpenAI-style ``image_url`` content parts
+      (data URLs) so a multimodal model can read them. History keeps a
+      short ``[Attached image(s): ...]`` placeholder instead of the raw
+      bytes, so long conversations don't balloon and later turns don't
+      re-upload the same picture.
+
+    Returns ``(model_content, history_text)`` where ``model_content`` is a
+    plain string when there are no images and a content-part list otherwise.
+    """
+    images = images or []
+    documents = documents or []
+
+    for doc in documents[:4]:
+        name = (doc.get("name") or "document").strip()
+        body = (doc.get("text") or "").strip()
+        if body:
+            text += f"\n\n[Attached document: {name}]\n{body}"
+
+    history_text = text
+    model_content: str | list[dict] = text
+
+    valid_images = [img for img in images[:4] if img.get("data_url")]
+    if valid_images:
+        names = ", ".join((img.get("name") or "image") for img in valid_images)
+        history_text = f"{text}\n\n[Attached image(s): {names}]"
+        parts: list[dict] = [{"type": "text", "text": text}]
+        for img in valid_images:
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": img["data_url"]},
+            })
+        model_content = parts
+
+    return model_content, history_text
+
+
 async def chat(
     user_message: str,
     conversation_id: str | None = None,
     site_key: str | None = None,
     owner_id: str | None = None,
+    images: list[dict] | None = None,
+    documents: list[dict] | None = None,
 ) -> dict:
     """
     Process a user message through the agent.
@@ -208,11 +255,13 @@ async def chat(
     if site_key:
         user_message = f"[Context: The user is asking about site '{site_key}'] {user_message}"
 
-    messages.append({"role": "user", "content": user_message})
+    model_content, history_text = _compose_user_message(user_message, images, documents)
+    messages.append({"role": "user", "content": model_content})
 
-    # Save user message
+    # Save user message (history stays text-only — image bytes are not
+    # persisted, only a placeholder, so later turns don't re-send them).
     _save_message(
-        conversation_id, "user", user_message,
+        conversation_id, "user", history_text,
         site_key=site_key, owner_id=owner_id,
     )
 
@@ -393,6 +442,8 @@ async def chat_stream(
     conversation_id: str | None = None,
     site_key: str | None = None,
     owner_id: str | None = None,
+    images: list[dict] | None = None,
+    documents: list[dict] | None = None,
 ):
     """
     Streaming variant of `chat()` — yields dict events that the FastAPI
@@ -444,9 +495,10 @@ async def chat_stream(
     messages.extend(history)
     if site_key:
         user_message = f"[Context: site='{site_key}'] {user_message}"
-    messages.append({"role": "user", "content": user_message})
+    model_content, history_text = _compose_user_message(user_message, images, documents)
+    messages.append({"role": "user", "content": model_content})
     _save_message(
-        conversation_id, "user", user_message,
+        conversation_id, "user", history_text,
         site_key=site_key, owner_id=owner_id,
     )
 

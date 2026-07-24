@@ -35,7 +35,7 @@ function authHeaders() {
  * `signal` lets the caller abort via `AbortController.abort()`; the
  * fetch promise rejects and the generator unwinds cleanly.
  */
-export async function* streamChat({ message, conversationId, siteKey, signal }) {
+export async function* streamChat({ message, conversationId, siteKey, images, documents, signal }) {
   const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -43,6 +43,8 @@ export async function* streamChat({ message, conversationId, siteKey, signal }) 
       message,
       conversation_id: conversationId,
       site_key: siteKey,
+      images: images ?? [],
+      documents: documents ?? [],
     }),
     signal,
   });

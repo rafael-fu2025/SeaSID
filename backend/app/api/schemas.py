@@ -137,10 +137,27 @@ class LabelsResponse(BaseModel):
 
 # ── Agent ──────────────────────────────────────────────────────────────────
 
+class ChatImage(BaseModel):
+    # A base64 data URL (e.g. "data:image/png;base64,..."). Capped well
+    # above a ~9 MB image so a couple of photos fit without opening the
+    # door to unbounded request bodies.
+    data_url: str = Field(min_length=1, max_length=12_000_000)
+    name: str | None = Field(default=None, max_length=256)
+
+
+class ChatDocument(BaseModel):
+    # Text-like documents (txt/csv/md/json) are inlined into the prompt
+    # as plain text; binary formats (pdf/doc) are intentionally excluded.
+    name: str = Field(min_length=1, max_length=256)
+    text: str = Field(min_length=1, max_length=200_000)
+
+
 class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
     site_key: str | None = None
+    images: list[ChatImage] = Field(default_factory=list)
+    documents: list[ChatDocument] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):

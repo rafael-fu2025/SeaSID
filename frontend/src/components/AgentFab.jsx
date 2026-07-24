@@ -28,6 +28,31 @@ function newMessageId() {
   return `m-${Date.now().toString(36)}-${_id}`;
 }
 
+// Text-like documents are read as plain text and inlined into the prompt
+// server-side; binary formats (pdf/doc) are intentionally out of scope.
+const TEXT_DOC_RE = /\.(txt|csv|md|markdown|json|log|tsv|ya?ml)$/i;
+function isTextLikeAttachment(mime, name) {
+  if (mime?.startsWith('text/')) return true;
+  if (mime === 'application/json') return true;
+  return TEXT_DOC_RE.test(name || '');
+}
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
 /**
  * AgentFab — floating AI assistant.
  *
@@ -126,8 +151,41 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
    * arrive. Exposed via ref so clickable prompt buttons can call it
    * without re-rendering the FAB.
    */
-  const sendRef = useRef(async (text) => {
-    const userMsg = { id: newMessageId(), role: 'user', content: text };
+  const sendRef = useRef(async (text, attachments = []) => {
+    // Read attached files: images become base64 data URLs for the
+    // multimodal model, text documents are read as plain text and
+    // inlined server-side. `display` mirrors what we render in the
+    // user's bubble (image thumbnails + document chips).
+    const images = [];
+    const documents = [];
+    const display = [];
+    for (const a of attachments) {
+      if (a.kind === 'image') {
+        try {
+          const dataUrl = await readFileAsDataURL(a.file);
+          images.push({ data_url: dataUrl, name: a.name });
+          display.push({ kind: 'image', name: a.name, url: dataUrl });
+        } catch { /* skip unreadable image */ }
+      } else if (isTextLikeAttachment(a.mime, a.name)) {
+        try {
+          const textContent = await readFileAsText(a.file);
+          documents.push({ name: a.name, text: textContent });
+          display.push({ kind: a.kind, name: a.name });
+        } catch { /* skip unreadable document */ }
+      }
+    }
+
+    // Fall back to a neutral prompt when the operator sent only files so
+    // the backend (message min_length=1) still accepts the turn.
+    const messageText =
+      text || (images.length || documents.length ? 'Please review the attached file(s).' : '');
+
+    const userMsg = {
+      id: newMessageId(),
+      role: 'user',
+      content: messageText,
+      attachments: display,
+    };
     const assistantMsg = {
       id: newMessageId(),
       role: 'assistant',
@@ -153,9 +211,11 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
 
     try {
       for await (const ev of streamChat({
-        message: text,
+        message: messageText,
         conversationId,
         siteKey,
+        images,
+        documents,
         signal: controller.signal,
       })) {
         switch (ev.type) {
@@ -263,10 +323,10 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
 
   // Keep the ref pointing at the latest closure so prompt buttons stay
   // in sync without re-rendering them.
-  const send = (text) => {
+  const send = (text, attachments = []) => {
     const t = (text ?? draft).trim();
-    if (!t || busy) return;
-    return sendRef.current(t);
+    if ((!t && attachments.length === 0) || busy) return;
+    return sendRef.current(t, attachments);
   };
 
   const stop = () => {
@@ -460,7 +520,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             ref={composerRef}
             value={draft}
             onChange={setDraft}
-            onSend={(overrideText) => send(overrideText)}
+            onSend={(attachments) => send(undefined, attachments)}
             onStop={stop}
             busy={busy}
             siteKey={siteKey}

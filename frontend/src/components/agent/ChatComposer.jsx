@@ -113,9 +113,25 @@ const ChatComposer = forwardRef(function ChatComposer({
   // a `[file: name]` text stub because the chip itself is the source of
   // truth for the attachment.
   const [attachments, setAttachments] = useState([]);
+  // Mirror the latest attachments in a ref so the unmount cleanup can
+  // revoke outstanding object URLs without re-subscribing on every change.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   const removeAttachment = (id) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
   };
+
+  // Revoke any outstanding preview URLs when the composer unmounts so we
+  // don't leak object URLs for attachments that were never sent.
+  useEffect(() => () => {
+    attachmentsRef.current.forEach((a) => {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    });
+  }, []);
 
   const attachFile = (file) => {
     if (!file) return;
@@ -213,12 +229,25 @@ const ChatComposer = forwardRef(function ChatComposer({
     },
   }), []);
 
-  const canSend = value.trim().length > 0 && !busy;
+  const canSend = (value.trim().length > 0 || attachments.length > 0) && !busy;
+
+  // Hand the current attachments up to the parent and clear the local
+  // chip strip. The parent reads the draft text from its own state, so
+  // we only pass the files here. The chip preview object URLs are revoked
+  // now that the transcript renders its own persistent copy.
+  const submit = () => {
+    if (!canSend) return;
+    onSend(attachments);
+    attachments.forEach((a) => {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    });
+    setAttachments([]);
+  };
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (canSend) onSend();
+      submit();
     }
   };
 
@@ -226,13 +255,12 @@ const ChatComposer = forwardRef(function ChatComposer({
   // synthetic click from TooltipTrigger asChild never steals the
   // pointer event away from the underlying button.
   const handleSendClick = () => {
-    if (canSend) onSend();
+    submit();
   };
 
-  // Drag-and-drop support: a file dropped onto the composer becomes
-  // an @-mention-style stub. Files aren't uploaded yet (the agent
-  // doesn't accept attachments) but we surface the affordance so the
-  // UX contract matches what the model can eventually consume.
+  // Drag-and-drop support: files dropped onto the composer are added as
+  // attachments and sent with the next message (images to the multimodal
+  // model, text documents inlined into the prompt).
   const handleDragOver = (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.items || []).some((i) => i.kind === 'file')) {
       e.preventDefault();
@@ -247,10 +275,9 @@ const ChatComposer = forwardRef(function ChatComposer({
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer?.files || []);
     if (files.length === 0) return;
-    // Stub: append filenames to the draft as plain text. Real
-    // attachments would push binary blobs into the message payload.
-    const names = files.map((f) => f.name).join(', ');
-    onChange((value ? value.trimEnd() + ' ' : '') + `[file: ${names}] `);
+    // Dropped files become real attachments (same path as the + menu)
+    // so they ride along with the next send instead of a text stub.
+    files.forEach((file) => attachFile(file));
   };
 
   return (
@@ -389,7 +416,7 @@ const ChatComposer = forwardRef(function ChatComposer({
         <input
           ref={documentInputRef}
           type="file"
-          accept=".pdf,.doc,.docx,.txt,.csv,.md,application/pdf,text/plain,text/csv"
+          accept=".txt,.csv,.md,.markdown,.json,.log,.tsv,.yml,.yaml,text/plain,text/csv,text/markdown,application/json"
           className="hidden"
           onChange={handleDocument}
           data-testid="agent-attach-document-input"

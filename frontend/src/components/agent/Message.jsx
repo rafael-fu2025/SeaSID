@@ -1,4 +1,4 @@
-import { Bot, AlertTriangle, User } from 'lucide-react';
+import { Bot, AlertTriangle, User, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import MarkdownResponse from '@/components/MarkdownResponse';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -31,6 +31,8 @@ export function Message({ message }) {
 }
 
 function UserMessage({ message }) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const hasContent = typeof message.content === 'string' && message.content.length > 0;
   return (
     <div
       className="flex flex-col items-end gap-1"
@@ -40,9 +42,37 @@ function UserMessage({ message }) {
         <span>You</span>
         <User className="size-3" />
       </header>
-      <div className="max-w-[88%] whitespace-pre-wrap break-words border border-border bg-card p-2.5 text-sm text-foreground">
-        {message.content}
-      </div>
+      {attachments.length > 0 && (
+        <div
+          className="flex max-w-[88%] flex-wrap justify-end gap-2"
+          data-testid="message-user-attachments"
+        >
+          {attachments.map((a, i) =>
+            a.kind === 'image' && a.url ? (
+              <img
+                key={i}
+                src={a.url}
+                alt={a.name || 'attachment'}
+                className="size-24 rounded-md border border-border object-cover"
+              />
+            ) : (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground"
+                title={a.name}
+              >
+                <FileText className="size-3 shrink-0" />
+                <span className="max-w-[12rem] truncate">{a.name}</span>
+              </span>
+            ),
+          )}
+        </div>
+      )}
+      {hasContent && (
+        <div className="max-w-[88%] whitespace-pre-wrap break-words border border-border bg-card p-2.5 text-sm text-foreground">
+          {message.content}
+        </div>
+      )}
     </div>
   );
 }
@@ -96,12 +126,12 @@ function AssistantMessage({ message }) {
       {!isPlaceholderState && (
         <div
           className={cn(
-            'w-full border bg-reef/5 p-3 text-sm text-foreground',
+            'w-full border bg-reef/5 p-3 text-xs text-foreground',
             'border-reef/30',
           )}
           data-testid="message-assistant-body"
         >
-          <MarkdownResponse>{message.content ?? ''}</MarkdownResponse>
+          <MarkdownResponse size="xs">{message.content ?? ''}</MarkdownResponse>
         </div>
       )}
     </div>

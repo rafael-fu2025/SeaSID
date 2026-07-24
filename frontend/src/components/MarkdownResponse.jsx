@@ -39,13 +39,14 @@ export function sanitizeModelOutput(input) {
  *    bubbles without margin churn.
  *  - Links open in a new tab with `rel="noopener noreferrer"`.
  */
-export default function MarkdownResponse({ children, dense = false, className = '' }) {
+export default function MarkdownResponse({ children, dense = false, className = '', size = 'sm' }) {
   const cleaned = sanitizeModelOutput(typeof children === 'string' ? children : '');
 
   return (
     <div
       className={[
-        'markdown text-sm leading-relaxed text-foreground',
+        'markdown leading-relaxed text-foreground',
+        size === 'xs' ? 'text-xs' : 'text-sm',
         'break-words [&>*+*]:mt-2.5',
         className,
       ].join(' ')}
