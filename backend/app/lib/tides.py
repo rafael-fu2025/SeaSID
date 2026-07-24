@@ -1,16 +1,15 @@
 """
 WorldTides client for hourly tide heights.
 
-Reads WORLDTIDES_API_KEY from .env. If missing or request fails,
+Reads a rotating encrypted key from the SeaSID database. If missing or request fails,
 returns empty list and logs a warning — never raises.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -31,9 +30,16 @@ def fetch_tides(lat: float, lon: float, length_seconds: int = 86400) -> list[dic
     Returns a list of dicts with keys: ts (datetime), height_m (float).
     Returns empty list if API key is missing or request fails.
     """
-    api_key = os.getenv("WORLDTIDES_API_KEY", "").strip()
+    api_key = ""
+    try:
+        from app.lib import provider_keys as _pk
+        key_record = _pk.resolve_provider_value("tides")
+        if key_record is not None:
+            api_key = key_record.value
+    except Exception:
+        pass
     if not api_key:
-        logger.warning("WORLDTIDES_API_KEY not set — tide data will be zeros")
+        logger.warning("No enabled WorldTides database key — tide data will be zeros")
         return []
 
     params = {
@@ -80,5 +86,11 @@ def fetch_tides(lat: float, lon: float, length_seconds: int = 86400) -> list[dic
 
 
 def tides_enabled() -> bool:
-    """Check if the WorldTides API key is configured."""
-    return bool(os.getenv("WORLDTIDES_API_KEY", "").strip())
+    """Check whether the WorldTides provider has an enabled database key."""
+    try:
+        from app.lib import provider_keys as _pk
+        if _pk.resolve_provider_value("tides") is not None:
+            return True
+    except Exception:
+        pass
+    return False

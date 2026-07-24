@@ -75,7 +75,6 @@ const EMPTY_FORM = () => ({
 export default function Verify() {
   const [sites, setSites] = useState([]);
   const [recentLabels, setRecentLabels] = useState([]);
-  const [error, setError] = useState(null);
 
   const [open, setOpen] = useState(false);
 
@@ -86,7 +85,7 @@ export default function Verify() {
   }, []);
 
   const refreshTable = useCallback(() => {
-    api.getLabels('all', 15)
+    return api.getLabels('all', 15)
       .then((res) => setRecentLabels(res.labels || []))
       .catch(console.error);
   }, []);
@@ -127,7 +126,7 @@ export default function Verify() {
 
       {/* Recent observations — read-mostly list now that the form is a dialog */}
       <section>
-        <RecentObservationsTable recentLabels={recentLabels} />
+        <RecentObservationsTable recentLabels={recentLabels} onReload={refreshTable} />
       </section>
 
       {/* The dialog form */}
@@ -155,12 +154,6 @@ function NewObservationDialog({ open, onOpenChange, sites, onSubmitted }) {
   const [submitResult, setSubmitResult] = useState(null);
 
   const set = (key, value) => setForm((p) => ({ ...p, [key]: value }));
-
-  const reset = useCallback(() => {
-    setForm({ ...EMPTY_FORM(), site_key: sites[0]?.key || 'dauin_muck' });
-    setSubmitError(null);
-    setSubmitResult(null);
-  }, [sites]);
 
   // Reset the form whenever the dialog re-opens (so the user starts fresh).
   useEffect(() => {
@@ -448,14 +441,12 @@ function NewObservationDialog({ open, onOpenChange, sites, onSubmitted }) {
 /*  Recent observations                                                       */
 /* -------------------------------------------------------------------------- */
 
-function RecentObservationsTable({ recentLabels }) {
+function RecentObservationsTable({ recentLabels, onReload }) {
   const [refreshing, setRefreshing] = useState(false);
 
   const reload = () => {
     setRefreshing(true);
-    api.getLabels('all', 15)
-      .then((res) => setRecentLabels(res.labels || []))
-      .finally(() => setRefreshing(false));
+    Promise.resolve(onReload?.()).finally(() => setRefreshing(false));
   };
 
   if (recentLabels.length === 0) {

@@ -62,7 +62,6 @@ export function feedThinking(state, delta) {
         const keep = Math.min(text.length, THINK_CLOSE.length - 1);
         thinking += text.slice(0, text.length - keep);
         state.buffer = text.slice(text.length - keep);
-        text = '';
         break;
       }
       thinking += text.slice(0, closeIdx);
@@ -81,12 +80,10 @@ export function feedThinking(state, delta) {
         if (text.length < THINK_OPEN.length) {
           visible += text;
           state.buffer = '';
-          text = '';
         } else {
           const keep = THINK_OPEN.length - 1;
           visible += text.slice(0, text.length - keep);
           state.buffer = text.slice(text.length - keep);
-          text = '';
         }
         break;
       }

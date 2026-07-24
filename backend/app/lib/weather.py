@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import math
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import numpy as np
 import requests

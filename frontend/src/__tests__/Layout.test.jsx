@@ -68,7 +68,7 @@ describe('Layout (cockpit shell) — desktop ≥ 1024 px', () => {
     expect(screen.getByTestId('brand-link')).toBeInTheDocument();
     expect(screen.getByTestId('child')).toBeInTheDocument();
     expect(screen.getByTestId('status-clock')).toBeInTheDocument();
-    expect(screen.getByText(/Dumaguete · v3\.0\.0/)).toBeInTheDocument();
+    expect(screen.getByTestId('status-foundation')).toBeInTheDocument();
   });
 
   it('renders the expanded nav with icon + label for every page', () => {
@@ -78,22 +78,19 @@ describe('Layout (cockpit shell) — desktop ≥ 1024 px', () => {
     });
   });
 
-  it('exposes both collapse toggles (sidebar + inspector)', () => {
+  it('exposes the sidebar collapse toggle without an inspector rail', () => {
     renderLayout('/');
     expect(screen.getByTestId('nav-collapse')).toBeInTheDocument();
-    expect(screen.getByTestId('inspector-collapse')).toBeInTheDocument();
+    expect(screen.queryByTestId('right-rail')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('inspector-collapse')).not.toBeInTheDocument();
   });
 
-  it('renders the AI Agent FAB and the ⌘K palette opener', () => {
+  it('renders the AI Agent FAB and the Foundation University branding', () => {
     renderLayout('/');
     expect(screen.getByTestId('agent-fab')).toBeInTheDocument();
-    expect(screen.getByTestId('open-palette')).toBeInTheDocument();
+    expect(screen.getByTestId('status-foundation')).toBeInTheDocument();
   });
 
-  it('exposes a "Reset" link in the expanded sidebar footer', () => {
-    renderLayout('/');
-    expect(screen.getByLabelText(/reset cockpit layout/i)).toBeInTheDocument();
-  });
 });
 
 describe('Layout (cockpit shell) — mobile / tablet < 1024 px', () => {
@@ -114,14 +111,13 @@ describe('Layout (cockpit shell) — mobile / tablet < 1024 px', () => {
     expect(screen.queryByTestId('right-rail')).toBeNull();
     // Drawer triggers are mounted
     expect(screen.getByTestId('open-mobile-nav')).toBeInTheDocument();
-    expect(screen.getByTestId('open-mobile-inspector')).toBeInTheDocument();
+    expect(screen.queryByTestId('open-mobile-inspector')).not.toBeInTheDocument();
   });
 
-  it('still renders the page outlet, FAB and palette in the mobile shell', () => {
+  it('still renders the page outlet, FAB and clock in the mobile shell', () => {
     renderLayout('/', 'mobile');
     expect(screen.getByTestId('child')).toBeInTheDocument();
     expect(screen.getByTestId('agent-fab')).toBeInTheDocument();
-    expect(screen.getByTestId('open-palette')).toBeInTheDocument();
     expect(screen.getByTestId('status-clock')).toBeInTheDocument();
   });
 });

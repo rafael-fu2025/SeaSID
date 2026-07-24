@@ -6,10 +6,22 @@ import remarkGfm from 'remark-gfm';
 // (We strip real pictographs but keep ASCII, math symbols, and inline
 // formatting characters intact.)
 const PICTOGRAPH_RE = /\p{Extended_Pictographic}/gu;
+const THINK_BLOCK_RE = /<think\b[^>]*>[\s\S]*?<\/think\s*>/gi;
+const THINK_DANGLING_RE = /<think\b[^>]*>[\s\S]*$/gi;
+const THINK_TAG_RE = /<\/?think\b[^>]*>/gi;
 
 function stripEmoji(input) {
   if (!input) return input;
   return input.replace(PICTOGRAPH_RE, '');
+}
+
+export function sanitizeModelOutput(input) {
+  if (!input) return '';
+  return stripEmoji(input)
+    .replace(THINK_BLOCK_RE, '')
+    .replace(THINK_DANGLING_RE, '')
+    .replace(THINK_TAG_RE, '')
+    .trim();
 }
 
 /**
@@ -28,7 +40,7 @@ function stripEmoji(input) {
  *  - Links open in a new tab with `rel="noopener noreferrer"`.
  */
 export default function MarkdownResponse({ children, dense = false, className = '' }) {
-  const cleaned = stripEmoji(typeof children === 'string' ? children : '');
+  const cleaned = sanitizeModelOutput(typeof children === 'string' ? children : '');
 
   return (
     <div

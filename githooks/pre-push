@@ -1,0 +1,149 @@
+#!/bin/sh
+#
+# SeaSID pre-push validation gate.
+#
+# Purpose
+#   Block a push when the test suites that guard the changed code — and the
+#   security-critical modules — are not green. This is the smallest gate that
+#   runs before code leaves the machine (i.e. before it can reach the base
+#   branch on the remote).
+#
+# Behaviour
+#   * Scopes to the changed area when possible:
+#       - backend/  changed -> ruff lint + full backend pytest suite
+#       - frontend/ changed -> eslint + frontend vitest suite
+#   * ALWAYS runs the security-critical backend tests, whatever changed,
+#     covering:
+#       - app/secret_store.py    (tests/test_admin_api_keys.py)
+#       - app/auth.py            (tests/test_auth.py)
+#       - scripts/migrate_v2*.py (tests/test_phase5_label_schema.py)
+#   * A non-zero exit blocks the push.
+#   * Every run appends a PASS/FAIL record to <git-dir>/seasid-prepush.log.
+#
+# Emergency bypass (discouraged; leaves no gate record on the remote):
+#       git push --no-verify
+#
+set -u
+
+Z40="0000000000000000000000000000000000000000"
+remote_name="${1:-origin}"
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "[pre-push] not inside a git work tree; skipping gate" >&2
+  exit 0
+}
+cd "$ROOT" || exit 1
+
+LOG="$(git rev-parse --git-path seasid-prepush.log)"
+case "$LOG" in
+  /*) : ;;
+  *)  LOG="$ROOT/$LOG" ;;
+esac
+
+# Security-critical backend tests that must ALWAYS run (space separated).
+CRITICAL_TESTS="tests/test_admin_api_keys.py tests/test_auth.py tests/test_phase5_label_schema.py"
+
+# Locate the backend interpreter (prefer the project virtualenv).
+if [ -f "$ROOT/backend/.venv/Scripts/python.exe" ]; then
+  PY="$ROOT/backend/.venv/Scripts/python.exe"        # Windows venv
+elif [ -x "$ROOT/backend/.venv/bin/python" ]; then
+  PY="$ROOT/backend/.venv/bin/python"                # POSIX venv
+else
+  PY="python"                                        # fall back to PATH
+fi
+
+# --- Pick a base ref to diff a brand-new branch against --------------------
+first_base() {
+  for c in "$remote_name/HEAD" "$remote_name/main" "$remote_name/master" \
+           origin/HEAD origin/main origin/master main master; do
+    if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# --- Collect the files changed by the refs being pushed --------------------
+# git feeds "<local_ref> <local_sha> <remote_ref> <remote_sha>" lines on stdin.
+changed="$(
+  saw=0
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "${local_ref:-}" ] && continue
+    [ "$local_sha" = "$Z40" ] && continue          # branch deletion: nothing to test
+    saw=1
+    if [ "$remote_sha" != "$Z40" ]; then
+      git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null
+    else
+      base="$(first_base || true)"
+      if [ -n "$base" ]; then
+        mb="$(git merge-base "$base" "$local_sha" 2>/dev/null || true)"
+        if [ -n "$mb" ]; then
+          git diff --name-only "$mb" "$local_sha" 2>/dev/null
+        else
+          git diff --name-only "$base" "$local_sha" 2>/dev/null
+        fi
+      else
+        git ls-files                                # no base: treat everything as changed
+      fi
+    fi
+  done
+  [ "$saw" = 0 ] && git ls-files                    # manual run / empty stdin: be conservative
+)"
+
+backend_changed=0
+frontend_changed=0
+printf '%s\n' "$changed" | grep -q '^backend/'  && backend_changed=1
+printf '%s\n' "$changed" | grep -q '^frontend/' && frontend_changed=1
+
+echo "[pre-push] SeaSID validation gate (remote: $remote_name)"
+echo "[pre-push] scope -> backend_changed=$backend_changed frontend_changed=$frontend_changed"
+
+status=0
+detail="none"
+
+# --- Backend --------------------------------------------------------------
+if [ "$backend_changed" = 1 ]; then
+  echo "[pre-push] backend touched -> ruff lint + FULL backend pytest suite"
+  if ! ( cd "$ROOT/backend" && "$PY" -m ruff check . ); then
+    status=1; detail="backend-lint"
+  elif ! ( cd "$ROOT/backend" && "$PY" -m pytest -q ); then
+    status=1; detail="backend-full"
+  fi
+else
+  echo "[pre-push] backend untouched -> running security-critical backend tests"
+  # shellcheck disable=SC2086
+  if ! ( cd "$ROOT/backend" && "$PY" -m pytest -q $CRITICAL_TESTS ); then
+    status=1; detail="backend-critical"
+  fi
+fi
+
+# --- Frontend (only if it changed, and only if backend already passed) ----
+if [ "$status" = 0 ] && [ "$frontend_changed" = 1 ]; then
+  echo "[pre-push] frontend touched -> eslint + vitest suite"
+  if command -v npm >/dev/null 2>&1; then
+    if ! ( cd "$ROOT/frontend" && npm run lint ); then
+      status=1; detail="frontend-lint"
+    elif ! ( cd "$ROOT/frontend" && npm test ); then
+      status=1; detail="frontend"
+    fi
+  else
+    echo "[pre-push] ERROR: npm not found but frontend changed" >&2
+    status=1; detail="frontend-no-npm"
+  fi
+fi
+
+# --- Record the result + final verdict ------------------------------------
+ts="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date)"
+if [ "$status" = 0 ]; then verdict="PASS"; else verdict="FAIL"; fi
+printf '%s\t%s\tremote=%s\tbackend_changed=%s\tfrontend_changed=%s\tdetail=%s\n' \
+  "$ts" "$verdict" "$remote_name" "$backend_changed" "$frontend_changed" "$detail" >> "$LOG" 2>/dev/null || true
+
+if [ "$status" = 0 ]; then
+  echo "[pre-push] result: PASS (recorded in $LOG)"
+  exit 0
+fi
+
+echo "[pre-push] result: FAIL ($detail) — push aborted (recorded in $LOG)" >&2
+echo "[pre-push] fix the failing tests, then push again." >&2
+exit 1

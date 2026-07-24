@@ -13,7 +13,7 @@ for site in ("dauin_muck", "apo_reef"):
     print(f"  optimal_window: {result['optimal_window']}")
     print(f"  p_bad range: [{min(p_bads)}, {max(p_bads)}]")
     print(f"  p_bad unique: {sorted(set(p_bads))}")
-    print(f"  first 3 hours:")
+    print("  first 3 hours:")
     for h in result["hours"][:3]:
         print(f"    ts={h['ts']} p_bad={h['p_bad']} viz={h['viz_label']} "
               f"current={h['current_risk']} risk={h['risk']} "

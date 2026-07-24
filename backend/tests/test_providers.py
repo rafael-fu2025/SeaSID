@@ -12,7 +12,6 @@ These tests stub out all network calls and verify:
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -183,7 +182,7 @@ def test_compute_features_emits_14_values_with_defaults(seeded_weather):
 
 def test_compute_features_uses_air_snapshot(seeded_weather, seeded_air):
     """When an AirQualityObs row exists, it overrides the AQI/PM2.5 defaults."""
-    from app.lib.features import _compute_features, FEATURE_COLUMNS, _fetch_air_snapshot
+    from app.lib.features import _compute_features, _fetch_air_snapshot
 
     _, rows = seeded_weather
     weather_df = pd.DataFrame([{
@@ -234,7 +233,7 @@ def test_compute_features_uses_marine_window(seeded_weather, seeded_marine):
 
 def test_legacy_eleven_feature_positions_unchanged(seeded_weather):
     """The first 11 values must match the legacy contract names."""
-    from app.lib.features import _compute_features, FEATURE_COLUMNS
+    from app.lib.features import FEATURE_COLUMNS
 
     legacy_names = [
         "precip_24h_mm", "precip_48h_mm", "precip_recent_3h",

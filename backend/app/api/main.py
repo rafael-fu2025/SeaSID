@@ -14,6 +14,7 @@ Endpoints:
   GET  /api/v1/agent/briefing      — Auto-generated briefing
   GET  /api/v1/experiments/results — Experiment results
   POST /api/v1/experiments/run     — Trigger experiment suite + reload model
+  POST /api/v1/experiments/run/stream — SSE variant of /run with live progress
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -44,12 +45,27 @@ from app.api.schemas import (
     LabelsResponse,
     OptimalWindow,
     SiteInfo,
+    LoginRequest,
+    PasswordChange,
+    TokenResponse,
+    UserInfo,
     VerifyRequest,
     VerifyResponse,
 )
 from app.api.services import get_forecast, submit_verification, get_labels
 from app.lib.db import init_db
 from app.lib.sites import get_all_sites, site_keys
+from app.auth import (
+    Principal,
+    authenticate_user,
+    auth_enabled,
+    create_access_token,
+    ensure_role,
+    ensure_site_access,
+    get_current_principal,
+)
+from app.api.admin import router as admin_router
+from app.lib.user_store import change_password as db_change_password
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +73,19 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
 # Explicit allow-list — wildcard CORS was removed in v2.
 # Override via SEASID_ALLOWED_ORIGINS env var (comma-separated).
-import os as _os
+import os as _os  # noqa: E402
 _DEFAULT_ORIGINS = (
     "http://localhost:5173,http://localhost:5174,http://localhost:5175,"
     "http://localhost:5176,http://localhost:5177,http://localhost:5178,"
     "http://localhost:3000,http://localhost:8000,"
     "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,"
     "http://127.0.0.1:5176,http://127.0.0.1:5177,http://127.0.0.1:5178,"
-    "http://127.0.0.1:3000,http://127.0.0.1:8000"
+    "http://127.0.0.1:3000,http://127.0.0.1:8000,"
+    # cloudflared quick-tunnel hostnames (regenerated on each run; allow
+    # all trycloudflare.com subdomains so dev tunnels work out of the box).
+    "https://feature-combine-increases-evolution.trycloudflare.com,"
+    "https://uniprotkb-area-oriental-ben.trycloudflare.com,"
+    "https://*.trycloudflare.com"
 )
 ALLOWED_ORIGINS = [
     o.strip() for o in _os.getenv("SEASID_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
@@ -89,6 +110,65 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+app.include_router(admin_router)
+
+
+# ── Auth ───────────────────────────────────────────────────────────────────
+@app.post("/api/v1/auth/login", response_model=TokenResponse)
+def login(request: LoginRequest):
+    """Authenticate and return a JWT bearer token + the user profile.
+
+    When authentication is disabled, returns a synthetic admin token so the
+    UI keeps working in local dev. When enabled, looks up users in the DB
+    with a fallback to env-configured and dev-default credentials.
+    """
+    if not auth_enabled():
+        principal = Principal("dev", "dev", "admin", ("*",), authenticated=False)
+    else:
+        principal = authenticate_user(request.username, request.password)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+    token, expires_in = create_access_token(principal)
+    return TokenResponse(
+        access_token=token,
+        expires_in=expires_in,
+        user=UserInfo(
+            subject=principal.subject,
+            username=principal.username,
+            role=principal.role,
+            site_keys=list(principal.site_keys),
+        ),
+    )
+
+
+@app.get("/api/v1/auth/me", response_model=UserInfo)
+def me(principal: Principal = Depends(get_current_principal)) -> UserInfo:
+    """Return the current user decoded from the bearer token."""
+    if not auth_enabled():
+        return UserInfo(subject="dev", username="dev", role="admin", site_keys=["*"])
+    return UserInfo(
+        subject=principal.subject,
+        username=principal.username,
+        role=principal.role,
+        site_keys=list(principal.site_keys),
+    )
+
+
+@app.post("/api/v1/auth/password")
+def change_my_password(
+    payload: PasswordChange,
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    """Self-service password change for the signed-in user."""
+    if not auth_enabled():
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
+    ok = db_change_password(
+        principal.username, payload.current_password, payload.new_password,
+    )
+    if not ok:
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    return {"ok": True}
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,7 +192,7 @@ app.add_middleware(
 def health():
     """Health check endpoint."""
     from app.lib.model import load_best, get_model_type, selected_tier
-    from app.lib.db import Base, engine
+    from app.lib.db import engine
     from app.lib.providers import active_providers
     from sqlalchemy import inspect
 
@@ -132,12 +212,12 @@ def health():
 
     # Phase 3: include the tier qualifier so external monitors can see
     # whether we're using the LSTM / XGBoost / rules and why.
-    import json
-    logger.info("Phase 3 model tier: %s (%s)", tier, reason)
     response = HealthResponse(
         status="ok",
         version="1.0.0",
         model_loaded=model_type,
+        selected_tier=tier,
+        selection_reason=reason,
         db_tables=len(tables),
         providers=providers,
     )
@@ -156,8 +236,12 @@ def list_sites():
 # ── Forecast ───────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/forecast", response_model=ForecastResponse)
-def forecast(site: str = Query(..., description="Site key")):
+def forecast(
+    site: str = Query(..., description="Site key"),
+    _principal: Principal = Depends(get_current_principal),
+):
     """Get 48-hour forecast for a dive site (read-only, no side effects)."""
+    ensure_site_access(_principal, site)
     if site not in site_keys():
         raise HTTPException(status_code=404, detail=f"Unknown site: {site}. Valid: {site_keys()}")
 
@@ -219,10 +303,25 @@ def ingest(request: IngestRequest):
 # ── Verify ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/verify", response_model=VerifyResponse)
-def verify(request: VerifyRequest):
-    """Submit operator verification of dive conditions."""
+def verify(
+    request: VerifyRequest,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Submit operator verification of dive conditions.
+
+    Operators (and above) can verify any site they're scoped to. Viewers
+    cannot submit verifications (403). The authenticated principal's
+    identity is recorded as ``operator`` / ``actor_id`` regardless of any
+    spoofed value in the request body.
+    """
+    ensure_role(principal, "operator", "data_steward", "admin")
+    ensure_site_access(principal, request.site_key)
     try:
-        result = submit_verification(request.model_dump())
+        result = submit_verification(
+            request.model_dump(),
+            actor_id=principal.subject,
+            actor_username=principal.username,
+        )
         return VerifyResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -304,10 +403,16 @@ def active_learning_summary():
 def alerts(
     site: str = Query(default=None, description="Site key (optional)"),
     hours: int = Query(default=24, ge=1, le=168),
+    principal: Principal = Depends(get_current_principal),
 ):
     """Get recent alerts (read-only)."""
     from app.lib.alerts import get_recent_alerts
 
+    # A site-scoped user (no '*') may only query their own site; querying
+    # the cross-site default is denied so we don't leak alerts from sites
+    # they aren't assigned to.
+    if site is None and "*" not in principal.site_keys:
+        ensure_site_access(principal, site)
     try:
         result = get_recent_alerts(site_key=site, hours=hours)
         return AlertsResponse(alerts=result)
@@ -406,6 +511,61 @@ async def agent_briefing(site: str = Query(..., description="Site key")):
     except Exception as exc:
         logger.error("Briefing error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/v1/agent/tools")
+async def list_agent_tools() -> dict:
+    """Return the live tool registry (built-ins + MiniMax MCP web tools).
+
+    The Settings page calls this so it doesn't have to mirror
+    ``backend/app/lib/agent_tools.py`` in a frontend snapshot. Built-ins
+    are returned synchronously; MCP tools are discovered lazily on the
+    first call (which boots the subprocess). When the MCP is unavailable
+    (no key, no uvx, etc.) the response still succeeds with the built-ins.
+    """
+    from app.lib.agent_tools import _static_tool_definitions
+    from app.lib import agent_mcp
+
+    definitions = _static_tool_definitions()
+    mcp_status = "disabled"
+    mcp_tools: list[dict] = []
+    try:
+        mcp_tools_raw = await agent_mcp.get_mcp_tools()
+        mcp_status = "connected" if mcp_tools_raw else "unavailable"
+        for tool in mcp_tools_raw:
+            definitions.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema or {"type": "object", "properties": {}},
+                },
+            })
+            mcp_tools.append({
+                "name": tool.name,
+                "description": tool.description,
+                "source": "mcp_minimax",
+            })
+    except Exception as exc:
+        logger.debug("MCP tool discovery failed: %s", exc)
+        mcp_status = "error"
+
+    return {
+        "tools": [
+            {
+                "name": d["function"]["name"],
+                "description": d["function"].get("description", ""),
+                "parameters": d["function"].get("parameters", {}),
+                "source": "builtin",
+            }
+            for d in definitions
+        ],
+        "mcp": {
+            "status": mcp_status,
+            "server": "minimax",
+            "tools": mcp_tools,
+        },
+    }
 
 
 # ── Experiments ────────────────────────────────────────────────────────────
@@ -514,3 +674,193 @@ def run_experiments():
     except Exception as exc:
         logger.error("Experiment run error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/v1/experiments/run/stream")
+async def run_experiments_stream(
+    principal: Principal = Depends(get_current_principal),
+):
+    """SSE variant of ``POST /experiments/run`` — streams progress + per-model
+    metrics so the Experiments page can show the suite running live.
+
+    Wire format (newline-delimited SSE, ``data: {json}\\n\\n`` per frame):
+
+      - ``{type: "status", stage: "loading"|"running"|"complete", samples: int}``
+        — high-level lifecycle events. ``samples`` is the total label count.
+      - ``{type: "log", line: str}`` — one human-readable step line, mirroring
+        what ``scripts/run_experiments.py`` prints to stdout.
+      - ``{type: "metric", model: str, accuracy?, precision?, recall?, f1?, auc_roc?}``
+        — one frame per model (rule, xgb, lstm, gru) emitted as soon as that
+        model's metrics are available, so the comparison table fills in
+        row-by-row instead of waiting for the whole suite.
+      - ``{type: "done", best_model: str, results: dict}`` — terminal event.
+        Same payload shape as ``POST /experiments/run``.
+      - ``{type: "error", message: str}`` — terminal event when the suite
+        can't start (e.g. no labels) or raises mid-run.
+
+    The label fetch and the experiment suite itself are CPU-bound and
+    synchronous; we run them in a daemon worker thread so the asyncio
+    event loop stays responsive (and the SSE stream keeps flushing) for
+    the duration of the multi-minute training run. Side effects
+    (``model.reload()`` + ``invalidate_forecast_cache``) match the
+    blocking endpoint so the dashboard picks up the new bundle either way.
+    """
+    import asyncio
+    import threading
+    from datetime import date, datetime, timezone
+
+    import numpy as np
+    import pandas as pd
+
+    from app.lib import db as _db_lib
+    from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
+    from app.lib.scoring import label_to_binary
+    from app.lib.experiments import run_full_experiment_suite
+
+    logger.info("Experiments SSE stream started by %s", principal.username)
+
+    async def event_generator():
+        # ── 1. Pull labels from the DB (sync, but cheap) ─────────────────
+        try:
+            db = _db_lib.SessionLocal()
+            try:
+                labels = db.query(_db_lib.NoDiveLabel).all()
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.error("Experiments stream DB error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Database error: {exc}'})}\n\n"
+            return
+
+        if not labels:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No labels in database. Run seed_history.py first.'})}\n\n"
+            return
+
+        # ── 2. Build the feature matrices (sync; same as /experiments/run)
+        try:
+            X_rows, y_vals, X_seqs = [], [], []
+            label_dates: list[date] = []
+            label_site_keys: list[str] = []
+            for lbl in labels:
+                target_ts = datetime(
+                    lbl.date.year, lbl.date.month, lbl.date.day,
+                    12, 0, 0, tzinfo=timezone.utc,
+                )
+                try:
+                    feat_df = build_features(lbl.site_key, target_ts)
+                    X_rows.append(feat_df.values[0])
+                    X_seqs.append(build_sequence(lbl.site_key, target_ts, window_hours=24))
+                    y_vals.append(label_to_binary(lbl.label))
+                    label_dates.append(lbl.date)
+                    label_site_keys.append(lbl.site_key)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.error("Experiments stream feature build error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Feature build failed: {exc}'})}\n\n"
+            return
+
+        n_samples = len(X_rows)
+        # Loading → running transitions mirror the page's runStage state.
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'loading', 'samples': n_samples})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'running', 'samples': n_samples})}\n\n"
+
+        X_flat = pd.DataFrame(X_rows, columns=FEATURE_COLUMNS)
+        y = pd.Series(y_vals, name="label")
+        X_seq = np.array(X_seqs, dtype=np.float32)
+        y_arr = np.array(y_vals, dtype=np.float32)
+
+        # ── 3. Run the suite in a worker thread; bridge sync callbacks ────
+        #        back into the asyncio event loop via an asyncio.Queue.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _enqueue(event: dict) -> None:
+            # call_soon_threadsafe is the only safe way to hand a value
+            # to an asyncio.Queue from a non-asyncio thread.
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        def progress_callback(msg: str) -> None:
+            _enqueue({"type": "log", "line": msg})
+
+        def metric_callback(model_key: str, metrics: dict) -> None:
+            # Flatten the metrics dict into the SSE payload so the page
+            # can drop it straight into the model_comparison table.
+            payload = {"type": "metric", "model": model_key}
+            for key in ("accuracy", "precision", "recall", "f1", "auc_roc"):
+                if key in metrics and metrics[key] is not None:
+                    payload[key] = metrics[key]
+            _enqueue(payload)
+
+        def run_in_thread() -> None:
+            try:
+                results = run_full_experiment_suite(
+                    X_flat, y, X_seq, y_arr,
+                    label_dates=label_dates,
+                    label_site_keys=label_site_keys,
+                    progress_callback=progress_callback,
+                    metric_callback=metric_callback,
+                )
+                _enqueue({"type": "_done", "results": results})
+            except Exception as exc:
+                logger.exception("Experiments stream suite error")
+                _enqueue({"type": "_error", "message": str(exc)})
+            finally:
+                # Sentinel so the consumer loop always terminates even if
+                # the producer thread somehow exits without _done/_error.
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "_eof"})
+
+        threading.Thread(target=run_in_thread, daemon=True).start()
+
+        # ── 4. Drain the queue into SSE frames until the suite ends. ──────
+        while True:
+            event = await queue.get()
+            kind = event.get("type")
+
+            if kind == "_eof":
+                break
+
+            if kind == "_done":
+                results = event["results"]
+                # Same side effects as POST /experiments/run: reload the
+                # cached ML bundle + invalidate the per-site forecast cache.
+                try:
+                    from app.lib.model import reload as model_reload
+                    model_reload()
+                    logger.info("Model reloaded after experiments.run/stream")
+                except Exception as exc:
+                    logger.warning("Model reload failed after experiments.run/stream: %s", exc)
+                try:
+                    from app.api.services import invalidate_forecast_cache
+                    invalidate_forecast_cache(None)
+                except Exception as exc:
+                    logger.warning("Forecast cache invalidation failed: %s", exc)
+
+                # Build the payload as a local dict first so the f-string
+                # stays single-line — multi-line expressions inside f-string
+                # braces require Python 3.12+.
+                done_payload = {
+                    "type": "done",
+                    "best_model": results.get("best_model", "unknown"),
+                    "results": results,
+                }
+                yield f"data: {json.dumps(done_payload, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'complete', 'samples': n_samples})}\n\n"
+                continue
+
+            if kind == "_error":
+                yield f"data: {json.dumps({'type': 'error', 'message': event['message']})}\n\n"
+                continue
+
+            # Forward ``log`` / ``metric`` frames verbatim.
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+            "Connection": "keep-alive",
+        },
+    )

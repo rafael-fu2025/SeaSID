@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Sparkles, AlertTriangle, Activity, Wind, Droplets, Thermometer } from 'lucide-react';
+import {
+  RefreshCw, Sparkles, AlertTriangle, Activity, Wind, Droplets, Thermometer,
+  ChevronLeft, ChevronRight,
+} from 'lucide-react';
 import { api } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart } from '@/components/Skeleton';
+import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart, SkeletonProvenance, SkeletonOptimalWindow, SkeletonFooter } from '@/components/Skeleton';
 import ForecastCard from '@/components/ForecastCard';
 import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
@@ -51,6 +54,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [windowHours, setWindowHours] = useState(48);
+  const [timelinePage, setTimelinePage] = useState(0);
   const cancelRef = useRef(false);
 
   const load = useCallback(async (siteKey) => {
@@ -58,7 +63,7 @@ export default function Dashboard() {
     setError(null);
     try {
       const [fc, al] = await Promise.all([
-        api.getForecast(siteKey),
+        api.getForecast(siteKey, 48),
         api.getAlerts(siteKey),
       ]);
       if (cancelRef.current) return;
@@ -94,7 +99,10 @@ export default function Dashboard() {
   };
 
   const currentHour = forecast?.hours?.[0];
-  const next12 = forecast?.hours?.slice(0, 12) || [];
+  const visibleHours = forecast?.hours?.slice(0, windowHours) || [];
+  const pageCount = Math.max(1, Math.ceil(visibleHours.length / 12));
+  const activePage = Math.min(timelinePage, pageCount - 1);
+  const pagedHours = visibleHours.slice(activePage * 12, activePage * 12 + 12);
   const optimal = forecast?.optimal_window;
 
   return (
@@ -183,12 +191,17 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Loading skeletons */}
+      {/* Loading skeletons — mirror the post-swap container order:
+          KPI strip → Probability chart → Forecast provenance →
+          Timeline grid → Optimal-window summary → Footer. */}
       {loading && !forecast && (
         <div className="flex flex-col gap-6">
           <SkeletonKpiStrip count={5} />
-          <SkeletonForecastGrid count={12} />
           <SkeletonChart />
+          <SkeletonProvenance />
+          <SkeletonForecastGrid count={12} />
+          <SkeletonOptimalWindow />
+          <SkeletonFooter />
         </div>
       )}
 
@@ -257,6 +270,91 @@ export default function Dashboard() {
         </section>
       )}
 
+      {/* Probability chart */}
+      {!loading && visibleHours.length > 0 && (
+        <PBadChart
+          hours={visibleHours}
+          optimalIso={optimal?.ts}
+          label={`${windowHours}-hour probability of no-go`}
+        />
+      )}
+
+      {/* Timeline */}
+      {!loading && visibleHours.length > 0 && (
+        <section aria-labelledby="timeline-heading">
+          <header className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="timeline-heading" className="text-base font-semibold tracking-tight">
+                {windowHours}-hour forecast
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Scroll horizontally to inspect each hourly forecast.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <WindowToggle
+                value={windowHours}
+                onChange={(hours) => {
+                  setWindowHours(hours);
+                  setTimelinePage(0);
+                }}
+              />
+              {optimal && (
+                <Badge variant="secondary" className="font-mono">
+                  <Sparkles className="mr-1 size-3 text-positive" />
+                  Optimal at{' '}
+                  {new Date(optimal.ts).toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit', hour12: false,
+                  })}
+                </Badge>
+              )}
+            </div>
+          </header>
+          <div data-testid="dashboard-forecast-grid">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+              {pagedHours.map((hour) => (
+                <ForecastCard
+                  key={hour.ts}
+                  hour={hour}
+                  isOptimal={optimal?.ts === hour.ts}
+                />
+              ))}
+            </div>
+            {pageCount > 1 && (
+              <div className="mt-3 flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+                <span className="text-xs text-muted-foreground">
+                  Hours {activePage * 12 + 1}–{Math.min((activePage + 1) * 12, visibleHours.length)}
+                  {' '}of {visibleHours.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setTimelinePage((page) => Math.max(0, page - 1))}
+                    disabled={activePage === 0}
+                    aria-label="Previous forecast hours"
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  <span className="min-w-14 text-center text-xs font-medium">
+                    {activePage + 1} / {pageCount}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setTimelinePage((page) => Math.min(pageCount - 1, page + 1))}
+                    disabled={activePage === pageCount - 1}
+                    aria-label="Next forecast hours"
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Provenance strip (roadmap #8) — answers "how old?", "which source?",
           "which model?" from the same screen as the KPIs. */}
       {!loading && forecast && (
@@ -270,52 +368,13 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Timeline */}
-      {!loading && next12.length > 0 && (
-        <section aria-labelledby="timeline-heading">
-          <header className="mb-3 flex items-end justify-between">
-            <div>
-              <h2 id="timeline-heading" className="text-base font-semibold tracking-tight">
-                12-hour forecast
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Each hour is a single forecast card with risk badge and probability meter.
-              </p>
-            </div>
-            {optimal && (
-              <Badge variant="secondary" className="font-mono">
-                <Sparkles className="mr-1 size-3 text-positive" />
-                Optimal at{' '}
-                {new Date(optimal.ts).toLocaleTimeString([], {
-                  hour: '2-digit', minute: '2-digit', hour12: false,
-                })}
-              </Badge>
-            )}
-          </header>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {next12.map((hour) => (
-              <ForecastCard
-                key={hour.ts}
-                hour={hour}
-                isOptimal={optimal?.ts === hour.ts}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Probability chart */}
-      {!loading && next12.length > 0 && (
-        <PBadChart hours={next12} optimalIso={optimal?.ts} />
-      )}
-
       {/* Optimal window summary */}
       {!loading && optimal && (
         <section>
           <header className="mb-3">
             <h2 className="text-base font-semibold tracking-tight">Optimal dive window</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              The hour in the next 12 with the lowest no-go probability.
+              The hour in the next {windowHours} with the lowest no-go probability.
             </p>
           </header>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -337,6 +396,32 @@ export default function Dashboard() {
           Generated {fmtTimeFull(forecast.generated_at)}
         </footer>
       )}
+    </div>
+  );
+}
+
+function WindowToggle({ value, onChange }) {
+  return (
+    <div
+      className="inline-flex rounded-md border border-border bg-muted/40 p-1"
+      aria-label="Dashboard forecast window"
+    >
+      {[12, 24, 48].map((hours) => (
+        <button
+          key={hours}
+          type="button"
+          onClick={() => onChange(hours)}
+          aria-pressed={value === hours}
+          className={cn(
+            'rounded px-2.5 py-1 text-xs font-medium transition-all duration-200',
+            value === hours
+              ? 'bg-reef text-reef-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-background hover:text-foreground',
+          )}
+        >
+          {hours}h
+        </button>
+      ))}
     </div>
   );
 }

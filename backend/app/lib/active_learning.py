@@ -42,7 +42,7 @@ import math
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, timedelta, timezone
 
-from app.lib.db import SessionLocal, NoDiveLabel, OperatorVerification
+from app.lib.db import NoDiveLabel, OperatorVerification
 from app.lib.features import build_features
 from app.lib.model import load_best, predict, get_calibrator
 from app.lib.scoring import features_dict_from_row, p_bad_from_rules

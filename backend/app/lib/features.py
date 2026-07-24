@@ -29,7 +29,6 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
 
 from app.lib import db
 from app.lib.sites import is_muck_site

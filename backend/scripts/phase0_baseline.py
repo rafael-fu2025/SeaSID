@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.api.services import get_forecast
 from app.lib.model import load_best, get_model_type
-from app.lib.freshness import compute_freshness, model_version
+from app.lib.freshness import model_version
 
 OUT = Path("/tmp/phase0_baseline.json")
 

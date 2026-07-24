@@ -13,7 +13,6 @@ without touching this module.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 

@@ -8,8 +8,8 @@ Covers:
 """
 
 import json
-import os
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -96,24 +96,66 @@ class TestAgentChat:
 
     @pytest.mark.asyncio
     async def test_chat_no_api_key(self, monkeypatch):
-        """Agent returns graceful message when API key is missing.
-
-        The real `.env` may have OPENAI_API_KEY set; load_dotenv() runs at
-        module import time and would re-populate it. Stub the agent module's
-        ``os.getenv`` so chat() sees an empty key regardless.
-        """
+        """Environment credentials remain available as a deployment fallback."""
         import app.lib.agent as _agent
 
-        def _fake_getenv(key, default=""):
-            if key == "OPENAI_API_KEY":
-                return ""
-            return os.environ.get(key, default)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-fallback")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
 
-        monkeypatch.setattr(_agent.os, "getenv", _fake_getenv)
+        provider_store, key_record, base_url = _agent._resolve_llm_runtime()
 
-        result = await _agent.chat("Hello")
+        assert provider_store is None
+        assert key_record.value == "sk-environment-fallback"
+        assert base_url == "https://example.test/v1"
 
-        assert "response" in result
-        assert "conversation_id" in result
-        # Should mention API key or configuration
-        assert "API key" in result["response"] or "not configured" in result["response"] or "not installed" in result["response"] 
+    @pytest.mark.asyncio
+    async def test_stream_uses_edited_database_key_and_base_url(self, monkeypatch):
+        import app.lib.agent as _agent
+        from app.lib import provider_keys
+
+        created = provider_keys.create_provider_key(
+            provider="llm",
+            label="primary",
+            value="sk-before-edit",
+        )
+        provider_keys.update_provider_key(created["id"], value="sk-after-edit")
+        provider_keys.update_provider_config(
+            "llm",
+            base_url="https://llm.example.test/v1",
+            updated_by_subject="admin",
+        )
+
+        captured = {}
+
+        class FakeStream:
+            async def _chunks(self):
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(
+                        delta=SimpleNamespace(content="connected", tool_calls=None),
+                        finish_reason="stop",
+                    )],
+                    usage=None,
+                )
+
+            def __aiter__(self):
+                return self._chunks()
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured["request"] = kwargs
+                return FakeStream()
+
+        class FakeAsyncOpenAI:
+            def __init__(self, *, api_key, base_url):
+                captured["api_key"] = api_key
+                captured["base_url"] = base_url
+                self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        events = [event async for event in _agent.chat_stream("Hello")]
+
+        assert captured["api_key"] == "sk-after-edit"
+        assert captured["base_url"] == "https://llm.example.test/v1"
+        assert any(event.get("type") == "text" for event in events)
+        assert events[-1]["type"] == "done"

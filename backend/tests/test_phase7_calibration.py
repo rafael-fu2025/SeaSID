@@ -1,12 +1,8 @@
 """Phase 7 — probability calibration regression tests."""
 from __future__ import annotations
 
-import pickle
-import tempfile
-from pathlib import Path
 
 import numpy as np
-import pytest
 
 
 # ── Identity passthrough ──────────────────────────────────────────────────
@@ -167,6 +163,7 @@ def test_ece_zero_for_perfectly_calibrated_model():
     )
     # This isn't perfectly calibrated — so just verify ECE is small (not 0).
     ece_val = _ece(probs, np.array([0] * 30, dtype=int))
+    assert ece_val >= 0.0  # well-defined: non-negative and not NaN
     # ECE will be large (0.05 + 0.15 + 0.95)/3 ≈ 0.38 — that's fine, we
     # want this test to assert ECE is well-defined, not assert a magic 0.
 
@@ -250,9 +247,15 @@ def test_get_calibrator_returns_identity_when_no_file(tmp_path, monkeypatch):
 # ── model_version integration ─────────────────────────────────────────────
 
 def test_model_version_includes_calibrator_tag():
-    """model_version() output must show the calibrator method."""
-    from app.lib.freshness import model_version
-    s = model_version(None)
+    """model_metadata() output must show the calibrator method.
+
+    The plain :func:`model_version` returns the bare version identifier
+    (so it can be pinned by tests / compared by the UI). The richer
+    ``model_metadata`` adds the ``[cal-<method>]`` tag plus the tier
+    qualifier — that's where the calibrator signal lives now.
+    """
+    from app.lib.freshness import model_metadata
+    s = model_metadata(None)
     # Tag is in form [cal-identity] or [cal-platt] etc.
     import re
     assert re.search(r"\[cal-(identity|platt|isotonic)\]", s), s

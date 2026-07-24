@@ -6,22 +6,30 @@ import MapPage from './pages/MapPage';
 import Experiments from './pages/Experiments';
 import Verify from './pages/Verify';
 import Settings from './pages/Settings';
+import Profile from './pages/Profile';
 import Agent from './pages/Agent';
+import { AuthGate, AuthProvider } from './auth/AuthContext';
+import LoginPage from './auth/LoginPage';
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/forecast" element={<Forecast />} />
-          <Route path="/map" element={<MapPage />} />
-          <Route path="/experiments" element={<Experiments />} />
-          <Route path="/verify" element={<Verify />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/agent" element={<Agent />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <AuthGate fallback={<LoginPage />}>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/forecast" element={<Forecast />} />
+              <Route path="/map" element={<MapPage />} />
+              <Route path="/experiments" element={<Experiments />} />
+              <Route path="/verify" element={<Verify />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/agent" element={<Agent />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AuthGate>
+    </AuthProvider>
   );
 }

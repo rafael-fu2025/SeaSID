@@ -1,0 +1,24 @@
+# SeaSID backend — tooling configuration.
+#
+# Ruff is the backend linter. Run it from the backend/ directory using the
+# project virtualenv:
+#
+#   .venv/Scripts/python -m ruff check .          # lint the tree (validation gate)
+#   .venv/Scripts/python -m ruff check . --fix    # apply the safe auto-fixes
+#
+# The rule set stays close to Ruff's defaults (pyflakes `F` plus the safe
+# pycodestyle `E` subset) so the tree is clean today and the check can gate new
+# code. Widen `select` deliberately as older debt is paid down.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", ".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# One-off pipeline scripts prepend the repo root onto sys.path before importing
+# `app.*` (E402) and use single-letter math names in the calibration loop
+# (E741). They are developer utilities, not part of the shipped package.
+"scripts/*.py" = ["E402", "E741"]

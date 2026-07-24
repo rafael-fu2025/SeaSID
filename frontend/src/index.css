@@ -11,6 +11,7 @@
    stock shadcn `.dark` class. Keeps parity with the existing
    ThemeContext that toggles `data-theme` on <html>. */
 @custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+@custom-variant dark  (&:where([data-theme="dark"],  [data-theme="dark"]  *));
 
 /* ─────────────────────────────────────────────────────────────────────────
    SeaSID palette (dark, default)
@@ -213,4 +214,88 @@
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--strong); background-clip: padding-box; }
+}
+
+/* ----------------------------------------------------------
+ * Map markers — popup and tooltip skin to match the dashboard
+ * ---------------------------------------------------------- */
+
+@layer components {
+
+  /* ===== Click popup (full details) ===== */
+  .map-site-marker-popup .leaflet-popup-content-wrapper {
+    @apply rounded-md border border-border bg-popover p-0 text-popover-foreground shadow-lg;
+    border-radius: 8px;
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+  }
+  .map-site-marker-popup .leaflet-popup-content {
+    @apply m-0 w-[260px] p-4 text-sm leading-relaxed;
+    margin: 0 !important;
+    width: 260px !important;
+  }
+  .map-site-marker-popup .leaflet-popup-tip {
+    background-color: var(--popover) !important;
+  }
+  .map-site-marker-popup .leaflet-popup-close-button {
+    @apply text-muted-foreground hover:text-foreground;
+    padding: 8px 8px 0 0 !important;
+  }
+
+  .map-popup__title {
+    @apply mb-2 text-sm font-semibold tracking-tight;
+    color: var(--popover-foreground) !important;
+  }
+  .map-popup__row {
+    @apply flex items-center justify-between gap-3 text-xs;
+  }
+  .map-popup__row + .map-popup__row {
+    @apply mt-1.5;
+  }
+  .map-popup__row span {
+    color: var(--muted-foreground) !important;
+  }
+  .map-popup__row strong {
+    @apply font-medium;
+    color: var(--popover-foreground) !important;
+  }
+  .map-popup__hint {
+    @apply mt-3 border-t border-border pt-2 text-[10px] uppercase tracking-wider;
+    color: var(--muted-foreground) !important;
+  }
+
+  /* ===== Hover tooltip (compact) ===== */
+  .map-site-tooltip {
+    @apply rounded-md border border-border bg-popover px-3 py-2 shadow-md;
+    border-radius: 8px;
+    white-space: normal;
+    padding: 8px 12px !important;
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+    border-color: var(--border) !important;
+  }
+  .map-site-tooltip::before {
+    border-top-color: var(--popover) !important;
+  }
+  .map-site-tooltip .map-tooltip__title {
+    @apply mb-1 text-xs font-semibold tracking-tight;
+    color: var(--popover-foreground) !important;
+  }
+  .map-site-tooltip .map-tooltip__row {
+    @apply flex items-center justify-between gap-3 text-[11px];
+  }
+  .map-site-tooltip .map-tooltip__row + .map-tooltip__row {
+    @apply mt-0.5;
+  }
+  .map-site-tooltip .map-tooltip__row span {
+    color: var(--muted-foreground) !important;
+  }
+  .map-site-tooltip .map-tooltip__row strong {
+    @apply font-medium tabular-nums;
+    color: var(--popover-foreground) !important;
+  }
+  .map-site-tooltip .map-tooltip__hint {
+    @apply mt-1.5 border-t border-border pt-1.5 text-[9px] uppercase tracking-wider;
+    color: var(--muted-foreground) !important;
+  }
 }

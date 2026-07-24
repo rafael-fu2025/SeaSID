@@ -2,7 +2,7 @@
 Storm Glass marine weather provider.
 
 Docs:   https://docs.stormglass.io/
-Auth:   STORMGLASS_API_KEY  (free tier: 50 requests/day, 10/day/hour per IP)
+Auth:   encrypted SeaSID database key (free tier: 50 requests/day)
 Hourly endpoint:
     GET https://api.stormglass.io/v2/weather/point
         ?lat={lat}&lon={lon}&params=waveHeight,wavePeriod,seaLevel,...
@@ -20,7 +20,6 @@ Free tier notes:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from datetime import datetime, timezone
 
@@ -29,7 +28,6 @@ import requests
 from app.lib.providers.base import (
     MarineProvider,
     ProviderInfo,
-    ProviderError,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,11 +78,21 @@ class StormGlassMarineProvider(MarineProvider):
     )
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = (api_key or os.getenv("STORMGLASS_API_KEY", "")).strip()
+        if api_key:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = ""
+            try:
+                from app.lib import provider_keys as _pk
+                record = _pk.resolve_provider_value("stormglass")
+                if record is not None:
+                    self.api_key = record.value
+            except Exception:
+                pass
 
     def fetch_hourly(self, lat: float, lon: float, hours: int = 48) -> list[dict]:
         if not self.api_key:
-            logger.warning("STORMGLASS_API_KEY not set — returning empty marine data")
+            logger.warning("No enabled Stormglass database key — returning empty marine data")
             return []
 
         params = {

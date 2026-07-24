@@ -182,24 +182,42 @@ def compute_freshness(
 
 
 def model_version(bundle: dict | None) -> str:
-    """Return a human-readable version string for the loaded ML bundle.
+    """Return the canonical version string for the loaded ML bundle.
 
     LSTM bundles carry ``config`` (with arch and seq_len) but no real
     version. We surface the model type + arch so operators can tell which
-    model produced the forecast. Phase 3: when no model qualifies its tier
-    gate, the version string makes that explicit ("rules-fallback-v1")
-    instead of silently appearing as if a rule-based fallback was an LSTM.
+    model produced the forecast.
 
-    Phase 3: also calls out the active tier qualifier so the UI can show
-    "this model has AUC=0.55, below the 0.60 gate" in operator mode.
+    The returned string is the *bare* version identifier (e.g.
+    ``"lstm-lstm-24h-v1"``); calibration and tier qualifiers are exposed
+    separately via :func:`model_metadata` so the API response stays tidy
+    and the freshness tests can pin the version exactly.
+    """
+    if bundle is None:
+        return "rule-based-v1"
 
-    Phase 7: appends ``[cal-<method>]`` so operators can tell whether
-    the probability they're looking at has been calibrated.
+    model_type = _bundle_model_type(bundle)
+    if model_type == "lstm":
+        arch = bundle.get("config", {}).get("arch", "lstm")
+        seq_len = bundle.get("config", {}).get("seq_len", 24)
+        return f"lstm-{arch}-{seq_len}h-v1"
+    if model_type == "xgboost":
+        return "xgboost-v1"
+    return "rule-based-v1"
+
+
+def model_metadata(bundle: dict | None) -> str:
+    """Return a richer version descriptor that surfaces tier + calibration.
+
+    Use this in operator-facing logs and tooling where you want to see
+    *why* a particular tier qualified (or fell back to rules) and whether
+    the probability has been calibrated. The API response's ``model_version``
+    field should call :func:`model_version` instead — keep the metadata
+    out of the version string so consumers can pin it.
     """
     from app.lib.model import get_model_type, selected_tier, get_calibrator
 
     tier, reason = selected_tier()
-
     cal_tag = f"[cal-{get_calibrator().method}]"
 
     if bundle is None:
@@ -214,3 +232,22 @@ def model_version(bundle: dict | None) -> str:
     if model_type == "xgboost":
         return f"xgboost-v1 ({tier}) {cal_tag}"
     return f"rules-fallback-v1 ({tier}) {cal_tag}"
+
+
+def _bundle_model_type(bundle: dict) -> str:
+    """Best-effort model_type lookup without re-importing app.lib.model.
+
+    ``get_model_type`` may import the LSTM module which can be expensive in
+    unit tests; here we only need a string for the version tag.
+    """
+    mt = bundle.get("model_type")
+    if mt:
+        return str(mt)
+    # Fall back to the registry / class name when the bundle omits the field.
+    model_obj = bundle.get("model")
+    name = type(model_obj).__name__.lower() if model_obj is not None else ""
+    if "lstm" in name or "gru" in name:
+        return "lstm"
+    if "xgb" in name or "booster" in name:
+        return "xgboost"
+    return "rule_based"

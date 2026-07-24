@@ -2,19 +2,22 @@
 Test fixtures for SeaSID backend tests.
 """
 
-import asyncio
 import gc
 import os
 import socket as _socket
 import sys
-import tempfile
 import time
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import numpy as np
 import pytest
+
+# Endpoint tests exercise business behavior without requiring credentials.
+# Production defaults remain fail-closed because authentication is enabled
+# unless this explicit test setting is present.
+os.environ.setdefault("SEASID_AUTH_ENABLED", "false")
 
 # Ensure backend root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -73,7 +76,7 @@ if sys.platform == "win32":
         _ProactorCls._close_self_pipe = _safe_close_self_pipe
 
 
-from app.lib.db import Base, engine, SessionLocal, WeatherObs, TideObs, NoDiveLabel, init_db
+from app.lib.db import Base, WeatherObs, TideObs
 from app.lib.features import FEATURE_COLUMNS
 
 

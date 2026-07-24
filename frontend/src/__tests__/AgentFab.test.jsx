@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AgentFab } from '@/components/AgentFab';
 import { api, streamChat } from '@/api';
@@ -50,26 +50,19 @@ describe('AgentFab', () => {
     expect(screen.getByText(/no conversation yet/i)).toBeInTheDocument();
   });
 
-  it('renders suggested prompts as clickable <button>s (roadmap #10)', () => {
+  it('does not render suggested prompt buttons (roadmap #10 removed)', () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // Three clickable prompt buttons, accessible by data-testid.
-    const prompts = ['agent-prompt-0', 'agent-prompt-1', 'agent-prompt-2'];
-    for (const id of prompts) {
-      const btn = screen.getByTestId(id);
-      expect(btn).toBeInTheDocument();
-      expect(btn.tagName.toLowerCase()).toBe('button');
-    }
+    expect(screen.queryByTestId('agent-prompt-0')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-prompt-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-prompt-2')).not.toBeInTheDocument();
   });
 
-  it('clicking a suggested prompt sends it (roadmap #10)', async () => {
+  it('does not render inline suggestion chips above the input', () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    fireEvent.click(screen.getByTestId('agent-prompt-0'));
-
-    await waitFor(() => expect(streamChat).toHaveBeenCalled());
-    expect(streamChat.mock.calls[0][0].message).toMatch(/dive at dauin_muck/i);
-    expect(streamChat.mock.calls[0][0].siteKey).toBe('dauin_muck');
+    expect(screen.queryByTestId('agent-suggestions')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^agent-suggestion-\d+$/)).toHaveLength(0);
   });
 
   it('renders a composer with input + send button', () => {
@@ -79,13 +72,101 @@ describe('AgentFab', () => {
     expect(screen.getByTestId('agent-send')).toBeInTheDocument();
   });
 
-  it('composer hint matches actual behaviour (Enter to send, no Shift+Enter claim)', () => {
+});
+
+  it('shows a Stop button while streaming that aborts the in-flight request', async () => {
+    // Stream that respects the AbortSignal: when aborted, the finally
+    // block flips `aborted` to true, mirroring what streamChat would
+    // do in production (close the underlying fetch).
+    let aborted = false;
+    streamChat.mockImplementation(async function* (opts = {}) {
+      try {
+        yield { type: 'status', conversation_id: 'conv-3' };
+        while (true) {
+          if (opts.signal?.aborted) return;
+          await new Promise((r) => setTimeout(r, 10));
+          yield { type: 'text', delta: 'still going…' };
+        }
+      } finally {
+        aborted = true;
+      }
+    });
+
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // The misleading "Shift+Enter for newline" line must be gone.
-    expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument();
-    // The correct, honest hint is present.
-    expect(screen.getByText(/Enter to send/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+
+    // While streaming the Stop control replaces the Send button.
+    const stopBtn = await screen.findByTestId('agent-stop');
+    expect(stopBtn).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-send')).not.toBeInTheDocument();
+
+    fireEvent.click(stopBtn);
+    await waitFor(() => expect(aborted).toBe(true));
+  });
+
+  it('grows the textarea as the user types multi-line content', () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    const ta = screen.getByTestId('agent-input');
+    // Seed a multi-line draft; the height should grow past the
+    // single-line baseline.
+    fireEvent.change(ta, {
+      target: { value: 'line one\nline two\nline three\nline four' },
+    });
+    expect(ta.style.height).not.toBe('');
+  });
+
+  it('auto-focuses the textarea when the sheet opens', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // The composer mounts lazily with the Sheet. After one rAF the
+    // imperative focus() call from AgentFab has landed and the
+    // textarea is the active element.
+    await waitFor(() => {
+      const ta = screen.getByTestId('agent-input');
+      expect(document.activeElement).toBe(ta);
+    });
+  });
+
+  it('refocuses the textarea when the agent response finishes', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // The textarea is focused on open. Blur it to simulate the user
+    // clicking on the transcript while the response is streaming.
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+
+    // Wait for the reply to render.
+    await screen.findByText(/conditions look safe at dauin today/i);
+
+    // The composer should have pulled focus back. Use a short wait
+    // because the refocus runs in the finally block after state has
+    // committed, which happens a microtask or two after the text
+    // appears.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('agent-input'));
+    });
+  });
+
+  it('refocuses the textarea after a Reset', async () => {
+    renderFab();
+    fireEvent.click(screen.getByTestId('agent-fab'));
+    // Send something so the transcript is non-empty (Reset dialog
+    // only opens in that case).
+    fireEvent.change(screen.getByTestId('agent-input'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByTestId('agent-input'), { key: 'Enter', shiftKey: false });
+    await screen.findByText(/conditions look safe at dauin today/i);
+
+    // Open + confirm Reset.
+    fireEvent.click(screen.getByTestId('agent-reset'));
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('agent-input'));
+    });
   });
 
   it('submits composer text on Enter and consumes the SSE stream', async () => {
@@ -134,9 +215,7 @@ describe('AgentFab', () => {
     expect(await screen.findByTestId('agent-site-selector')).toBeInTheDocument();
   });
 
-  it('reset confirms via window.confirm when transcript is non-empty (roadmap #10)', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-
+  it('reset confirms via the Sign out/Reset dialog when transcript is non-empty (roadmap #10)', async () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
     const input = screen.getByTestId('agent-input');
@@ -147,28 +226,25 @@ describe('AgentFab', () => {
     const reset = screen.getByTestId('agent-reset');
     fireEvent.click(reset);
 
-    // User declined → messages should still be present.
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    // The custom dialog opens; user clicks Keep conversation → messages stay.
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-cancel'));
     expect(screen.queryByText(/no conversation yet/i)).not.toBeInTheDocument();
 
-    // User accepts → messages should clear.
-    confirmSpy.mockReturnValue(true);
+    // Re-opening the dialog and clicking Discard clears the transcript.
     fireEvent.click(reset);
+    await screen.findByTestId('confirm-dialog');
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
     expect(await screen.findByText(/no conversation yet/i)).toBeInTheDocument();
-    confirmSpy.mockRestore();
   });
 
   it('reset does not prompt when transcript is empty', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    // Reset is disabled in the empty state, so we use a click on a
-    // re-enabled button instead — but at this point the button is
-    // disabled (no messages). So we just confirm that confirm() is
-    // never called when the user cannot click reset.
+    // The empty-state reset button stays disabled so no dialog is shown.
     const reset = screen.getByTestId('agent-reset');
     expect(reset).toBeDisabled();
-    confirmSpy.mockRestore();
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument();
   });
 
   it('streams tool calls and thinking into the assistant message', async () => {
@@ -206,4 +282,3 @@ describe('AgentFab', () => {
     expect(await screen.findByTestId('thinking-block')).toBeInTheDocument();
     expect(await screen.findByText(/it looks good today/i)).toBeInTheDocument();
   });
-});

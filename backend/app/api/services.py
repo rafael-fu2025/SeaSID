@@ -4,17 +4,14 @@ Service layer — business logic between API routes and core library.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone, date as date_type
-from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 
 from app.lib import db
 from app.lib.features import (
     build_features, build_features_for_window, build_sequences_for_window,
-    FEATURE_COLUMNS,
 )
 from app.lib.freshness import compute_freshness, model_version
 from app.lib.providers import active_providers
@@ -22,14 +19,9 @@ from app.lib.scoring import (
     score_hour,
     risk_label,
     features_dict_from_row,
-    derive_label,
-    label_to_binary,
-    p_bad_from_rules,
 )
-from app.lib.sites import get_site, get_all_sites, site_keys
+from app.lib.sites import get_site, site_keys
 from app.lib.model import load_best, predict, get_model_type
-from app.lib.ingest import ingest_site
-from app.lib.alerts import get_recent_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -224,27 +216,17 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
             elif viz != "Unknown":
                 p_bad = predict(bundle, site_key, target_ts)
         except Exception as exc:
-            # ML predict crashed (e.g. feature-schema mismatch). Fall back
-            # to the rule-based scorer — it works on the same feature dict
-            # we just built, so the result is consistent with the agent.
-            if viz != "Unknown" and rl is not None:
-                p_bad = p_bad_from_rules(feat_dict)
-                source = "rules_fallback"
-                fallback_hours += 1
-                degraded_reason = (
-                    f"ml_predict_failed: {type(exc).__name__}"
-                )
-                logger.info(
-                    "predict(%s) failed (%s) — using rules fallback p_bad=%.3f",
-                    model_type_str, exc, p_bad,
-                )
+            # Keep the configured LSTM as the prediction source. The neutral
+            # value is explicitly marked degraded instead of switching models.
+            fallback_hours += 1
+            degraded_reason = f"lstm_predict_failed: {type(exc).__name__}"
+            logger.warning("LSTM prediction failed for %s: %s", target_ts, exc)
         else:
             # If the batch predict for the whole window failed and we
             # still got an individual ML number here, treat it as a fallback.
             if batched_failure is not None and viz != "Unknown":
-                source = "rules_fallback"
                 fallback_hours += 1
-                degraded_reason = f"ml_predict_failed: {batched_failure}"
+                degraded_reason = f"lstm_batch_failed: {batched_failure}"
 
         forecast_hours.append({
             "ts": target_ts.isoformat(),
@@ -261,7 +243,7 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
 
     # Optional air-quality block — present only when AQICN has populated
     # the air_quality_obs table for this site. Optional so deployments
-    # without AQICN_API_KEY still get a clean forecast response.
+    # without an AQICN database key still get a clean forecast response.
     air = _latest_air_snapshot(site_key)
 
     # ── Freshness + provenance (roadmap #8) ───────────────────────────
@@ -305,15 +287,8 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     else:
         data_as_of = now.isoformat()
 
-    # If every hour needed a fallback, surface that at the top level so the
-    # UI can render a single "model unavailable, using rules" banner instead
-    # of 48 identical chips.
-    if forecast_hours and fallback_hours == len(forecast_hours):
-        forecast_source = "rules_fallback"
-    elif fallback_hours > 0:
-        forecast_source = f"{model_type_str}+rules_fallback"
-    else:
-        forecast_source = model_type_str
+    # The configured source remains LSTM even when an hour is degraded.
+    forecast_source = model_type_str
 
     out = {
         "site_key": site_key,
@@ -321,6 +296,9 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
         "generated_at": now.isoformat(),
         "hours": forecast_hours,
         "optimal_window": optimal,
+        # A loaded ML bundle can still have individual hours substituted with
+        # the rules fallback, so keep this distinct from forecast_source.
+        "ml_bundle_loaded": bundle is not None,
         # Roadmap #8 fields
         "data_as_of": data_as_of,
         "freshness": [f.to_dict() for f in freshness_list],
@@ -344,7 +322,11 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     return out
 
 
-def submit_verification(data: dict) -> dict:
+def submit_verification(
+    data: dict,
+    actor_id: str | None = None,
+    actor_username: str | None = None,
+) -> dict:
     """Process an operator verification submission."""
     site = get_site(data["site_key"])
     if site is None:
@@ -371,11 +353,13 @@ def submit_verification(data: dict) -> dict:
         if no_go_reason is None and data["verdict"] != "dive":
             no_go_reason = "other"
         confidence = data.get("confidence") or "med"
+        operator = actor_username or data.get("operator")
 
         # Save to operator_verifications
         verification = db.OperatorVerification(
             site_key=data["site_key"],
-            operator=data.get("operator"),
+            operator=operator,
+            actor_id=actor_id,
             date=label_date,
             verdict=data["verdict"],
             actual_viz_m=data.get("actual_viz_m"),
@@ -392,7 +376,8 @@ def submit_verification(data: dict) -> dict:
             site_key=data["site_key"],
             date=label_date,
             label=data["verdict"],
-            source=f"operator_{data.get('operator', 'anon')}",
+            source=f"operator_{operator or 'anon'}",
+            actor_id=actor_id,
             actual_viz_m=data.get("actual_viz_m"),
             actual_current=data.get("actual_current"),
             comments=data.get("comments"),
@@ -411,7 +396,7 @@ def submit_verification(data: dict) -> dict:
             "no_go_reason": no_go_reason,
             "confidence": confidence,
         }
-    except Exception as exc:
+    except Exception:
         session.rollback()
         raise
     finally:

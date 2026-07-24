@@ -27,7 +27,6 @@ from app.lib.providers.base import (
     WeatherProvider,
 )
 from app.lib.providers.open_meteo import (
-    OpenMeteoAirProvider,
     OpenMeteoMarineProvider,
     OpenMeteoWeatherProvider,
 )
@@ -59,7 +58,7 @@ def _build_marine(name: str) -> Optional[MarineProvider]:
         provider = StormGlassMarineProvider()
         if not provider.api_key:
             logger.warning(
-                "SEASID_PROVIDER_MARINE=stormglass but STORMGLASS_API_KEY is empty — "
+                "SEASID_PROVIDER_MARINE=stormglass but no enabled database key exists — "
                 "marine provider will return empty data."
             )
         return provider
@@ -74,7 +73,7 @@ def _build_air(name: str) -> Optional[AirQualityProvider]:
         provider = AqicnAirProvider()
         if not provider.api_key:
             logger.warning(
-                "SEASID_PROVIDER_AIR=aqicn but AQICN_API_KEY is empty — "
+                "SEASID_PROVIDER_AIR=aqicn but no enabled database key exists — "
                 "air provider will return None."
             )
         return provider

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -23,11 +22,10 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     confusion_matrix,
-    roc_curve,
 )
 
 from app.lib.features import FEATURE_COLUMNS
-from app.lib.scoring import score_hour, risk_label, label_to_binary, features_dict_from_row
+from app.lib.scoring import score_hour, risk_label
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +93,6 @@ def _time_aware_split(
 
     # Stable sort so ties (same date) preserve original insertion order.
     order = sorted(range(n), key=lambda i: (label_dates[i], i))
-    sorted_dates = [label_dates[i] for i in order]
 
     train_end = max(1, int(round(n * train_frac)))
     val_end = max(train_end + 1, int(round(n * (train_frac + val_frac))))
@@ -151,6 +148,8 @@ def run_full_experiment_suite(
     y_arr: np.ndarray,
     label_dates: Sequence[date] | None = None,
     label_site_keys: Sequence[str] | None = None,
+    progress_callback=None,
+    metric_callback=None,
 ) -> dict:
     """
     Run the complete experiment suite:
@@ -164,13 +163,59 @@ def run_full_experiment_suite(
     When ``label_dates`` is provided, the split is time-aware (see
     :func:`_time_aware_split`). Otherwise the legacy random stratified
     split is used so unit tests that fabricate indices stay deterministic.
+
+    ``progress_callback`` is an optional ``callable(str) -> None`` invoked
+    with one human-readable line per step. The streaming endpoint at
+    ``/api/v1/experiments/run/stream`` supplies a callback that forwards
+    each line to the browser as an SSE ``log`` event, so the operator
+    watching the UI sees the same progress that was previously only
+    visible in the server console. ``print`` is always kept for
+    back-compat (so CLI / direct-script users still see the output).
+
+    ``metric_callback`` is an optional ``callable(str, dict) -> None``
+    invoked once per model after its metrics are computed. The first
+    argument is the model key (``"rule"``, ``"xgb"``, ``"lstm"``,
+    ``"gru"``); the second is the metrics dict (accuracy / precision /
+    recall / f1 / auc_roc). The streaming endpoint forwards each
+    invocation to the browser as an SSE ``metric`` event so the model
+    comparison table can fill in row-by-row as the suite runs, rather
+    than only after the whole run finishes.
     """
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    n_total = len(X_flat)
-    n_real = int((y >= 0).sum())  # all are valid labels
+    def _log(message: str) -> None:
+        """Forward one step to the UI listener and also to stdout.
 
-    print(f"Running experiments on {n_total} samples...")
+        Centralised so every step in the suite emits a single, identical
+        line in both channels. Exceptions inside the callback must not
+        break the run — wrap the call so a flaky UI subscriber can't
+        crash the training pipeline.
+        """
+        print(message)
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(message)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("progress_callback raised: %s", exc)
+
+    def _emit_metric(model_key: str, metrics: dict) -> None:
+        """Forward one model's finished metrics to a structured subscriber.
+
+        Mirrors the defensive wrapping in :func:`_log`: the SSE consumer
+        for the streaming endpoint lives in a worker thread, so any
+        exception it raises must not abort the training pipeline.
+        """
+        if metric_callback is None:
+            return
+        try:
+            metric_callback(model_key, metrics)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("metric_callback raised: %s", exc)
+
+    n_total = len(X_flat)
+
+    _log(f"Running experiments on {n_total} samples...")
 
     # ── 1. Split data ──────────────────────────────────────────────────
     if label_dates is not None and len(label_dates) == n_total:
@@ -208,15 +253,18 @@ def run_full_experiment_suite(
     X_val_f = X_flat.iloc[val_idx]
     X_test_f = X_flat.iloc[test_idx]
     y_train = y.iloc[train_idx]
-    y_val = y.iloc[val_idx]
+    # The validation split is materialized for parity with train/test but is not
+    # consumed by the current experiment flow; keep it addressable for future
+    # validation metrics without tripping the unused-variable check (F841).
+    y_val = y.iloc[val_idx]  # noqa: F841
     y_test = y.iloc[test_idx]
 
-    # Same splits for sequences
+    # Same splits for sequences (validation parity — see note above).
     X_train_seq = X_seq[train_idx]
-    X_val_seq = X_seq[val_idx]
+    X_val_seq = X_seq[val_idx]  # noqa: F841
     X_test_seq = X_seq[test_idx]
     y_train_arr = y_arr[train_idx]
-    y_val_arr = y_arr[val_idx]
+    y_val_arr = y_arr[val_idx]  # noqa: F841
     y_test_arr = y_arr[test_idx]
 
     dataset_summary = {
@@ -237,48 +285,52 @@ def run_full_experiment_suite(
             list(label_site_keys), test_idx,
         )
 
-    print(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
+    _log(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
 
     # ── 2. Train and evaluate models ───────────────────────────────────
     model_results = {}
 
     # Baseline 1: Rule-based
-    print("\n  Evaluating: Rule-based (Baseline 1)...")
+    _log("\n  Evaluating: Rule-based (Baseline 1)...")
     rule_metrics = _evaluate_rule_based(X_test_f, y_test)
     model_results["rule"] = rule_metrics
-    print(f"    F1: {rule_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {rule_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("rule", rule_metrics)
 
     # Baseline 2: XGBoost
-    print("  Training: XGBoost (Baseline 2)...")
+    _log("  Training: XGBoost (Baseline 2)...")
     xgb_metrics = _train_and_evaluate_xgb(X_train_f, y_train, X_test_f, y_test)
     model_results["xgb"] = xgb_metrics
-    print(f"    F1: {xgb_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {xgb_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("xgb", xgb_metrics)
 
     # Primary: LSTM
-    print("  Training: LSTM (Primary)...")
+    _log("  Training: LSTM (Primary)...")
     lstm_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="lstm",
     )
     model_results["lstm"] = lstm_metrics
-    print(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("lstm", lstm_metrics)
 
     # Ablation: GRU
-    print("  Training: GRU (Ablation)...")
+    _log("  Training: GRU (Ablation)...")
     gru_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="gru",
     )
     model_results["gru"] = gru_metrics
-    print(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
+    _log(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
+    _emit_metric("gru", gru_metrics)
 
     # ── 3. Ablation studies ────────────────────────────────────────────
-    print("\n  Running ablation studies...")
+    _log("\n  Running ablation studies...")
     ablations = _run_ablations(X_train_seq, y_train_arr, X_test_seq, y_test_arr)
 
     # ── 4. Find best model ─────────────────────────────────────────────
     best_model = max(model_results, key=lambda k: model_results[k].get("f1", 0))
 
     # ── 5. Generate plots ──────────────────────────────────────────────
-    print("  Generating plots...")
+    _log("  Generating plots...")
     _generate_plots(model_results, ablations)
 
     # ── 6. Assemble results ────────────────────────────────────────────
@@ -293,8 +345,8 @@ def run_full_experiment_suite(
     with open(RESULTS_PATH, "w") as f:
         json.dump(results, f, indent=2, default=str)
 
-    print(f"\n  Results saved to {RESULTS_PATH}")
-    print(f"  Best model: {best_model} (F1: {model_results[best_model].get('f1', 'N/A'):.4f})")
+    _log(f"\n  Results saved to {RESULTS_PATH}")
+    _log(f"  Best model: {best_model} (F1: {model_results[best_model].get('f1', 'N/A'):.4f})")
 
     return results
 

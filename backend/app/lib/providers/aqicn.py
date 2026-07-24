@@ -2,7 +2,7 @@
 AQICN (World Air Quality Index) provider.
 
 Docs:   https://aqicn.org/json-api/doc/
-Auth:   AQICN_API_KEY  (free tier: 1000 calls/day, 1 call/sec)
+Auth:   encrypted SeaSID database key (free tier: 1000 calls/day, 1 call/sec)
 Endpoint:
     GET https://api.waqi.info/feed/geo:{lat};{lon}/?token={key}
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -86,11 +85,21 @@ class AqicnAirProvider(AirQualityProvider):
     )
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = (api_key or os.getenv("AQICN_API_KEY", "")).strip()
+        if api_key:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = ""
+            try:
+                from app.lib import provider_keys as _pk
+                record = _pk.resolve_provider_value("aqicn")
+                if record is not None:
+                    self.api_key = record.value
+            except Exception:
+                pass
 
     def fetch_current(self, lat: float, lon: float) -> dict | None:
         if not self.api_key:
-            logger.warning("AQICN_API_KEY not set — returning no air-quality data")
+            logger.warning("No enabled AQICN database key — returning no air-quality data")
             return None
 
         url = AQICN_URL.format(lat=lat, lon=lon)

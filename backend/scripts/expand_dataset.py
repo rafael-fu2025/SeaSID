@@ -24,7 +24,7 @@ from app.lib.db import init_db
 from app.lib.ingest import ingest_archive
 from app.lib.sites import get_all_sites
 from app.lib.features import build_features, FEATURE_COLUMNS
-from app.lib.scoring import score_hour, risk_label, label_to_binary, features_dict_from_row
+from app.lib.scoring import score_hour, risk_label
 
 
 def main():
@@ -59,7 +59,7 @@ def main():
         print(f"  Ingested {weather_count} weather rows")
 
         # Step 2: Generate synthetic labels for each day
-        print(f"  Generating synthetic labels...")
+        print("  Generating synthetic labels...")
         db = _db_mod.SessionLocal()
         labels_created = 0
         labels_skipped = 0
@@ -113,7 +113,7 @@ def main():
                     db.add(synthetic_label)
                     labels_created += 1
 
-                except Exception as exc:
+                except Exception:
                     # Skip days with insufficient weather data
                     labels_skipped += 1
 
@@ -140,7 +140,7 @@ def main():
         db.close()
 
     print(f"\n{'='*50}")
-    print(f"Dataset expansion complete!")
+    print("Dataset expansion complete!")
     print(f"  Weather rows ingested: {total_weather}")
     print(f"  Synthetic labels created: {total_labels}")
     print(f"  Total dataset: {real_count} real + {synthetic_count} synthetic = {total_count} labels")

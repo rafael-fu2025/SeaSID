@@ -1,6 +1,5 @@
 """Phase 2 forecast verification — confirm retrained LSTM drives real p_bad values."""
 import time
-import json
 from app.api.services import get_forecast, invalidate_forecast_cache
 
 print("=" * 70)

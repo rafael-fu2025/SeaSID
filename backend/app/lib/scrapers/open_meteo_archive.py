@@ -17,7 +17,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 
 from app.lib.scrapers.base import BaseScraper, register_scraper
-from app.lib.features import build_features, FEATURE_COLUMNS
+from app.lib.features import build_features
 from app.lib.scoring import score_hour, risk_label, features_dict_from_row
 
 logger = logging.getLogger(__name__)
