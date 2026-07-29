@@ -352,12 +352,9 @@ async def chat(
     }
 
 
-async def generate_briefing(site_key: str, owner_id: str | None = None) -> dict:
-    """
-    Generate a structured dive briefing for a site.
-    Uses the agent with a specific briefing prompt.
-    """
-    prompt = (
+def _briefing_prompt(site_key: str) -> str:
+    """Shared prompt for the blocking and streaming briefing variants."""
+    return (
         f"Generate a comprehensive dive briefing for {site_key}. Include:\n"
         f"1. Current conditions summary (weather, visibility, currents)\n"
         f"2. Risk assessment with probability\n"
@@ -367,11 +364,32 @@ async def generate_briefing(site_key: str, owner_id: str | None = None) -> dict:
         f"Format it as a professional dive briefing."
     )
 
-    result = await chat(prompt, site_key=site_key, owner_id=owner_id)
+
+async def generate_briefing(site_key: str, owner_id: str | None = None) -> dict:
+    """
+    Generate a structured dive briefing for a site.
+    Uses the agent with a specific briefing prompt.
+    """
+    result = await chat(_briefing_prompt(site_key), site_key=site_key, owner_id=owner_id)
     result["response"] = strip_internal_thoughts(result.get("response"))
     result["site_key"] = site_key
     result["type"] = "briefing"
     return result
+
+
+async def generate_briefing_stream(site_key: str, owner_id: str | None = None):
+    """Streaming variant of :func:`generate_briefing`.
+
+    Yields the same ``{type, ...}`` events as :func:`chat_stream` (text
+    deltas, tool_call / tool_result, done, error) so the Forecast page can
+    render the briefing incrementally. ``<think>`` blocks are left in the
+    text deltas — the frontend splits them with the same state machine the
+    agent chat uses.
+    """
+    async for event in chat_stream(
+        _briefing_prompt(site_key), site_key=site_key, owner_id=owner_id,
+    ):
+        yield event
 
 
 # ── History management ─────────────────────────────────────────────────────

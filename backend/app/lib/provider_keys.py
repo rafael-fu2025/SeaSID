@@ -248,8 +248,10 @@ def pick_provider_key(
     """Return the next usable key for ``provider``.
 
     Selects among enabled keys with cooldown_until <= now. Prefers the
-    least-recently-used key (LRU on ``last_used_at``) and skips rows that
-    have hit MAX_RECENT_ERRORS recent consecutive errors.
+    least-recently-used key (LRU on ``last_used_at``). A key that has
+    errored repeatedly is only skipped while its cooldown is active —
+    once the cooldown expires it gets a half-open retry instead of being
+    locked out until the operator re-enters the value.
     """
     provider = _require_supported_provider(provider)
     db = _ensure_db()
@@ -270,8 +272,6 @@ def pick_provider_key(
                 continue
             cooldown_until = _as_utc(row.cooldown_until)
             if cooldown_until and cooldown_until > now:
-                continue
-            if (row.error_count or 0) >= MAX_RECENT_ERRORS:
                 continue
             try:
                 value = _decrypt_value(row.value_encrypted)
@@ -305,7 +305,6 @@ def mark_provider_error(key_id: int, error: str, cooldown: timedelta | None = No
     if not key_id:
         return
     db = _ensure_db()
-    cooldown_until = _utcnow() + (cooldown or DEFAULT_COOLDOWN)
     with db.SessionLocal() as session:
         row = session.get(db.ProviderApiKey, key_id)
         if row is None:
@@ -313,7 +312,12 @@ def mark_provider_error(key_id: int, error: str, cooldown: timedelta | None = No
         row.last_error_at = _utcnow()
         row.last_error = error[:500]
         row.error_count = (row.error_count or 0) + 1
-        row.cooldown_until = cooldown_until
+        # Back off harder once the key keeps failing, but never lock it out
+        # permanently — pick_provider_key retries after the cooldown lapses.
+        base = cooldown or DEFAULT_COOLDOWN
+        if cooldown is None and row.error_count >= MAX_RECENT_ERRORS:
+            base = DEFAULT_COOLDOWN * 4
+        row.cooldown_until = _utcnow() + base
         session.commit()
 
 

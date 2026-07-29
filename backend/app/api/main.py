@@ -12,6 +12,7 @@ Endpoints:
   POST /api/v1/alerts/run          — Trigger alert evaluation (write-side)
   POST /api/v1/agent/chat          — Agent conversation
   GET  /api/v1/agent/briefing      — Auto-generated briefing
+  GET  /api/v1/agent/briefing/stream — SSE variant of /briefing with live deltas
   GET  /api/v1/experiments/results — Experiment results
   POST /api/v1/experiments/run     — Trigger experiment suite + reload model
   POST /api/v1/experiments/run/stream — SSE variant of /run with live progress
@@ -517,6 +518,37 @@ async def agent_briefing(site: str = Query(..., description="Site key")):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/v1/agent/briefing/stream")
+async def agent_briefing_stream(site: str = Query(..., description="Site key")):
+    """Streaming variant of /agent/briefing — SSE of {type, ...} events.
+
+    Emits the same event vocabulary as /agent/chat/stream (text deltas,
+    tool_call / tool_result, usage, done, error) so the Forecast page can
+    render the briefing incrementally instead of blocking on the full
+    LLM turn. The terminal "done" event carries the consolidated
+    tool_calls log in the same {name, arguments, result} shape as the
+    blocking BriefingResponse.
+    """
+    from app.lib.agent import generate_briefing_stream
+
+    if site not in site_keys():
+        raise HTTPException(status_code=404, detail=f"Unknown site: {site}")
+
+    async def event_generator():
+        async for event in generate_briefing_stream(site):
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.get("/api/v1/agent/tools")
 async def list_agent_tools() -> dict:
     """Return the live tool registry (built-ins + MiniMax MCP web tools).
@@ -609,10 +641,19 @@ def run_experiments():
         from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
         from app.lib.scoring import label_to_binary
         from app.lib.experiments import run_full_experiment_suite
+        from scripts.train_model import EXCLUDED_SOURCES_DEFAULT
 
         db = _db_lib.SessionLocal()
         try:
-            labels = db.query(_db_lib.NoDiveLabel).all()
+            # Exclude the circular rule-generated sources so the held-out
+            # metrics reflect real/threshold-grounded data — matches
+            # scripts.run_experiments and scripts.train_model. Without this
+            # filter the suite re-learns the rule scorer's own output.
+            labels = (
+                db.query(_db_lib.NoDiveLabel)
+                .filter(_db_lib.NoDiveLabel.source.notin_(EXCLUDED_SOURCES_DEFAULT))
+                .all()
+            )
         finally:
             db.close()
 
@@ -720,6 +761,7 @@ async def run_experiments_stream(
     from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
     from app.lib.scoring import label_to_binary
     from app.lib.experiments import run_full_experiment_suite
+    from scripts.train_model import EXCLUDED_SOURCES_DEFAULT
 
     logger.info("Experiments SSE stream started by %s", principal.username)
 
@@ -728,7 +770,12 @@ async def run_experiments_stream(
         try:
             db = _db_lib.SessionLocal()
             try:
-                labels = db.query(_db_lib.NoDiveLabel).all()
+                # Exclude circular rule-generated sources (see /experiments/run).
+                labels = (
+                    db.query(_db_lib.NoDiveLabel)
+                    .filter(_db_lib.NoDiveLabel.source.notin_(EXCLUDED_SOURCES_DEFAULT))
+                    .all()
+                )
             finally:
                 db.close()
         except Exception as exc:

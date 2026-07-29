@@ -163,6 +163,130 @@ describe('Experiments page', () => {
   });
 });
 
+describe('Experiments page — metric comparison chart', () => {
+  it('renders the chart alongside the table for the model_comparison shape', async () => {
+    api.getExperimentResults.mockResolvedValue({
+      best_model: 'xgb',
+      model_comparison: {
+        rule: { accuracy: 0.78, precision: 0.78, recall: 1.0, f1: 0.78, auc_roc: 0.5 },
+        xgb:  { accuracy: 0.66, precision: 0.66, recall: 1.0, f1: 0.80, auc_roc: 0.54 },
+        lstm: { accuracy: 0.66, precision: 0.66, recall: 1.0, f1: 0.75, auc_roc: 0.51 },
+        gru:  { accuracy: 0.66, precision: 0.66, recall: 1.0, f1: 0.77, auc_roc: 0.51 },
+      },
+    });
+    renderExperiments();
+    // Both views should coexist: the table and the chart card.
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-table')).toBeInTheDocument();
+      expect(screen.getByTestId('experiments-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('experiments-chart-frame')).toBeInTheDocument();
+    });
+    // One legend entry per model.
+    for (const name of ['rule', 'xgb', 'lstm', 'gru']) {
+      expect(screen.getByTestId(`experiments-chart-legend-${name}`)).toBeInTheDocument();
+    }
+  });
+
+  it('marks the best model in the chart legend', async () => {
+    api.getExperimentResults.mockResolvedValue({
+      best_model: 'lstm',
+      model_comparison: {
+        lstm: { accuracy: 0.9, f1: 0.92 },
+        rule: { accuracy: 0.7, f1: 0.7 },
+      },
+    });
+    renderExperiments();
+    await waitFor(() => {
+      const legend = screen.getByTestId('experiments-chart-legend-lstm');
+      expect(legend.textContent.toLowerCase()).toContain('best');
+    });
+    const other = screen.getByTestId('experiments-chart-legend-rule');
+    expect(other.textContent.toLowerCase()).not.toContain('best');
+  });
+
+  it('renders the chart for the by_model shape', async () => {
+    api.getExperimentResults.mockResolvedValue({
+      by_model: {
+        xgboost: { accuracy: 0.9, f1: 0.9 },
+        rule_based: { accuracy: 0.7, f1: 0.7 },
+      },
+    });
+    renderExperiments();
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-chart-legend-xgboost')).toBeInTheDocument();
+      expect(screen.getByTestId('experiments-chart-legend-rule_based')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the chart for the models-array shape', async () => {
+    api.getExperimentResults.mockResolvedValue({
+      models: [
+        { name: 'xgb', metrics: { accuracy: 0.9, f1: 0.9 } },
+        { name: 'lstm', metrics: { accuracy: 0.8, f1: 0.8 } },
+      ],
+    });
+    renderExperiments();
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-chart-legend-xgb')).toBeInTheDocument();
+      expect(screen.getByTestId('experiments-chart-legend-lstm')).toBeInTheDocument();
+    });
+  });
+
+  it('does not render a chart when there are no results', async () => {
+    api.getExperimentResults.mockResolvedValue({});
+    renderExperiments();
+    await screen.findByText(/No experiment results yet/i);
+    expect(screen.queryByTestId('experiments-chart')).not.toBeInTheDocument();
+  });
+
+  it('adds chart series live as SSE metric events arrive during a run', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onMetric?.({ model: 'rule', accuracy: 0.7, f1: 0.78 });
+    // The chart appears with the first model's series before the run ends…
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-chart-legend-rule')).toBeInTheDocument();
+    });
+    // …and the next model joins the same chart when its metrics stream in.
+    handlers.onMetric?.({ model: 'xgb', accuracy: 0.9, f1: 0.94 });
+    await waitFor(() => {
+      expect(screen.getByTestId('experiments-chart-legend-xgb')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('experiments-chart-legend-rule')).toBeInTheDocument();
+  });
+
+  it('refreshes the chart from the final results on the done event', async () => {
+    const user = userEvent.setup();
+    api.getExperimentResults.mockResolvedValue({});
+    const { handlers } = makeFakeStream();
+    renderExperiments();
+    await user.click(screen.getByTestId('experiments-run'));
+
+    handlers.onStatus?.({ stage: 'running' });
+    handlers.onMetric?.({ model: 'rule', accuracy: 0.7, f1: 0.78 });
+    handlers.onDone?.({
+      best_model: 'xgb',
+      results: {
+        best_model: 'xgb',
+        model_comparison: {
+          rule: { accuracy: 0.7, f1: 0.78 },
+          xgb: { accuracy: 0.9, precision: 0.91, recall: 0.99, f1: 0.94, auc_roc: 0.85 },
+        },
+      },
+    });
+
+    await waitFor(() => {
+      const legend = screen.getByTestId('experiments-chart-legend-xgb');
+      expect(legend.textContent.toLowerCase()).toContain('best');
+    });
+  });
+});
+
 describe('Experiments page — automatic UI refresh on completion', () => {
   let listeners;
   let originalDispatch;

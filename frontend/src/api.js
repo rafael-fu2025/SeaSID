@@ -22,45 +22,16 @@ function authHeaders() {
 }
 
 /**
- * streamChat — async generator that POSTs the user message to
- * `/api/v1/agent/chat/stream` and yields each `{type, ...}` event
- * emitted by the FastAPI `StreamingResponse` (SSE format).
+ * readSseEvents — shared async generator that turns a fetch Response
+ * carrying `data: {json}\n\n` SSE frames into parsed event objects.
  *
- * Each event arrives as `data: {json}\n\n`. We:
+ * We:
  *  1. Read from the response body's `ReadableStream` chunk by chunk
  *  2. Buffer partial lines until we see a blank line
  *  3. Parse each `data:` line as JSON, ignoring any non-JSON heartbeats
  *  4. Hand the parsed object to the caller's `for-await` loop
- *
- * `signal` lets the caller abort via `AbortController.abort()`; the
- * fetch promise rejects and the generator unwinds cleanly.
  */
-export async function* streamChat({ message, conversationId, siteKey, images, documents, signal }) {
-  const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({
-      message,
-      conversation_id: conversationId,
-      site_key: siteKey,
-      images: images ?? [],
-      documents: documents ?? [],
-    }),
-    signal,
-  });
-
-  if (!res.ok || !res.body) {
-    if (res.status === 401) {
-      clearAuthToken();
-      window.dispatchEvent(new CustomEvent('seasid:auth-expired'));
-    }
-    let detail = '';
-    try { detail = await res.text(); } catch {}
-    throw new Error(
-      `Backend error ${res.status}${detail ? ': ' + detail : ''}`,
-    );
-  }
-
+async function* readSseEvents(res) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -92,6 +63,61 @@ export async function* streamChat({ message, conversationId, siteKey, images, do
   } finally {
     reader.releaseLock();
   }
+}
+
+async function throwStreamError(res) {
+  if (res.status === 401) {
+    clearAuthToken();
+    window.dispatchEvent(new CustomEvent('seasid:auth-expired'));
+  }
+  let detail = '';
+  try { detail = await res.text(); } catch {}
+  throw new Error(
+    `Backend error ${res.status}${detail ? ': ' + detail : ''}`,
+  );
+}
+
+/**
+ * streamChat — async generator that POSTs the user message to
+ * `/api/v1/agent/chat/stream` and yields each `{type, ...}` event
+ * emitted by the FastAPI `StreamingResponse` (SSE format).
+ *
+ * `signal` lets the caller abort via `AbortController.abort()`; the
+ * fetch promise rejects and the generator unwinds cleanly.
+ */
+export async function* streamChat({ message, conversationId, siteKey, images, documents, signal }) {
+  const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      site_key: siteKey,
+      images: images ?? [],
+      documents: documents ?? [],
+    }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) await throwStreamError(res);
+  yield* readSseEvents(res);
+}
+
+/**
+ * streamBriefing — async generator over `/api/v1/agent/briefing/stream`.
+ *
+ * Yields the same `{type, ...}` events as `streamChat` (text deltas,
+ * tool_call / tool_result, done, error) so the Forecast page can render
+ * the AI briefing incrementally instead of waiting for the full LLM turn.
+ */
+export async function* streamBriefing({ siteKey, signal }) {
+  const res = await fetch(
+    `${API_BASE}/api/v1/agent/briefing/stream?site=${encodeURIComponent(siteKey)}`,
+    { headers: authHeaders(), signal },
+  );
+
+  if (!res.ok || !res.body) await throwStreamError(res);
+  yield* readSseEvents(res);
 }
 
 async function request(path, options = {}) {

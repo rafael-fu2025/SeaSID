@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,7 +75,6 @@ def _resolve_uvx() -> str | None:
     # in the system Python's Scripts/ that the venv was created from. The
     # standard `shutil.which` lookup only walks PATH, so a relocated
     # install wouldn't be found without this extra nudge.
-    import sys
     if sys.prefix:
         candidate = os.path.join(sys.prefix, "Scripts", "uvx.exe")
         if os.path.isfile(candidate):
@@ -273,6 +273,43 @@ _tools_cache: list[McpTool] | None = None
 _key_id_in_use: int | None = None
 _lock = threading.Lock()
 
+# ── Subprocess-capable event loop ─────────────────────────────────────────
+#
+# scripts/run_api.py forces WindowsSelectorEventLoopPolicy (Proactor's
+# self-pipe raises WinError 10013 on some hosts), but the selector loop
+# does not implement asyncio subprocess support: create_subprocess_exec
+# raises a bare NotImplementedError, which surfaced in the logs as
+# "Failed to spawn MiniMax MCP: " with an empty reason. Host the MCP
+# subprocess on a dedicated ProactorEventLoop in a daemon thread instead,
+# and route every session coroutine through that loop so its futures,
+# tasks and pipes all live on one loop.
+
+_subprocess_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_subprocess_loop() -> asyncio.AbstractEventLoop | None:
+    """Return the dedicated subprocess loop (Windows), or None elsewhere."""
+    global _subprocess_loop
+    if sys.platform != "win32":
+        return None  # POSIX loops spawn subprocesses natively
+    with _lock:
+        if _subprocess_loop is not None and _subprocess_loop.is_running():
+            return _subprocess_loop
+        loop = asyncio.ProactorEventLoop()
+        threading.Thread(
+            target=loop.run_forever, name="mcp-minimax-loop", daemon=True
+        ).start()
+        _subprocess_loop = loop
+        return loop
+
+
+async def _run_mcp(coro):
+    """Await ``coro`` on the subprocess-capable loop (inline elsewhere)."""
+    loop = _get_subprocess_loop()
+    if loop is None or loop is asyncio.get_running_loop():
+        return await coro
+    return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
+
 
 async def _spawn_session(api_key: str) -> _McpSession:
     """Spawn the ``minimax-coding-plan-mcp`` subprocess and initialize it."""
@@ -292,6 +329,12 @@ async def _spawn_session(api_key: str) -> _McpSession:
     try:
         proc = await asyncio.create_subprocess_exec(
             uvx,
+            # Pin the MCP SDK below 2.0: `minimax-coding-plan-mcp` imports
+            # `mcp.server.fastmcp`, which mcp>=2 removed (FastMCP moved to
+            # its own package). Without the pin uvx resolves the latest SDK
+            # and the server dies on import before speaking JSON-RPC.
+            "--with",
+            "mcp<2",
             "minimax-coding-plan-mcp",
             "-y",
             stdin=asyncio.subprocess.PIPE,
@@ -432,10 +475,19 @@ async def ensure_booted() -> tuple[_McpSession | None, list[McpTool]]:
     if not api_key:
         return None, []
     try:
-        session, tools = await _boot(api_key, key_id)
+        session, tools = await _run_mcp(_boot(api_key, key_id))
     except McpConnectionError as exc:
         logger.warning("MiniMax MCP unavailable: %s", exc)
-        if key_id is not None:
+        # Only blame the key when the upstream rejected it. Local failures
+        # (missing uvx, spawn errors, timeouts) previously put the *shared
+        # LLM key* on cooldown, silently breaking agent chat until the key
+        # was re-entered in Settings.
+        text = str(exc).lower()
+        auth_like = any(
+            marker in text
+            for marker in ("401", "unauthorized", "invalid api key", "authorized_error")
+        )
+        if key_id is not None and auth_like:
             try:
                 provider_keys.mark_provider_error(key_id, str(exc))
             except Exception:
@@ -468,14 +520,14 @@ async def call_mcp_tool(name: str, arguments: dict) -> str:
             "that `uvx` is on PATH."
         )
     try:
-        result = await session.request(
-            "tools/call", {"name": name, "arguments": arguments or {}}
+        result = await _run_mcp(
+            session.request("tools/call", {"name": name, "arguments": arguments or {}})
         )
     except McpConnectionError as exc:
         # Mark the session dead so the next call respawns.
         global _session, _tools_cache
         try:
-            await session.close()
+            await _run_mcp(session.close())
         except Exception:
             pass
         _session = None
@@ -505,7 +557,7 @@ async def shutdown() -> None:
     if _session is None:
         return
     try:
-        await _session.close()
+        await _run_mcp(_session.close())
     finally:
         _session = None
         _tools_cache = None

@@ -25,28 +25,34 @@ def score_hour(features: dict) -> tuple[str, str]:
     wave_max = features.get("wave_max_24h_m", 0.0)
     tide_range = features.get("tide_range_24h_m", 0.0)
 
+    # Thresholds recalibrated (2026-07) against 3.5 years of real Open-Meteo
+    # sea-state for both production sites. ``wind_max_24h_kmh`` is a 24h PEAK,
+    # whose real median here is ~40 km/h, so the previous >35 rule flagged the
+    # median day as a no-go (degenerate ~95% no_dive labels). The bands below
+    # give a defensible ~57/30/12 dive/poor_viz/no_dive split.
+
     # ── Visibility assessment ──────────────────────────────────────────
     viz_label = "Good"
 
-    if precip_24h > 25 or precip_48h > 40:
+    if precip_24h > 25 or precip_48h > 45:
         viz_label = "Poor"
     elif precip_24h > 12 or precip_48h > 20:
         viz_label = "Moderate"
 
-    if wind_max > 35:
+    if wind_max > 55:
         viz_label = "Poor"
-    elif wind_max > 20 and viz_label == "Good":
+    elif wind_max > 45 and viz_label == "Good":
         viz_label = "Moderate"
 
-    if wave_max > 2.0 and viz_label != "Poor":
+    if wave_max > 1.0 and viz_label == "Good":
         viz_label = "Moderate"
 
     # ── Current risk assessment ────────────────────────────────────────
     current_risk = "Low"
 
-    if wind_max > 35:
+    if wind_max > 55:
         current_risk = "High"
-    elif wind_max > 20:
+    elif wind_max > 45:
         current_risk = "Moderate"
 
     if tide_range > 1.5:
@@ -54,9 +60,9 @@ def score_hour(features: dict) -> tuple[str, str]:
     elif tide_range > 1.0 and current_risk == "Low":
         current_risk = "Moderate"
 
-    if wave_max > 2.0:
+    if wave_max > 1.5:
         current_risk = "High"
-    elif wave_max > 1.2 and current_risk == "Low":
+    elif wave_max > 1.0 and current_risk == "Low":
         current_risk = "Moderate"
 
     return viz_label, current_risk

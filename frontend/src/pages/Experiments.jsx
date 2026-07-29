@@ -6,10 +6,60 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton, SkeletonChart } from '@/components/Skeleton';
+import ExperimentsChart from '@/components/ExperimentsChart';
 
 const METRICS = ['accuracy', 'precision', 'recall', 'f1', 'auc_roc'];
 
 const fmt = (v) => (v == null ? '—' : Number(v).toFixed(3));
+
+/**
+ * Normalize any supported results payload into flat metric rows:
+ * `[{ name, accuracy, precision, recall, f1, auc_roc }, …]`.
+ *
+ * `results` may be:
+ *   { by_model: { lstm: {metric: value}, xgboost: {...}, gru, rule_based }, ... }
+ *   { models: [...] }
+ *   { model_comparison: { rule, xgb, lstm, gru } }  ← SeaSID's actual shape
+ *   or a bare array of rows.
+ * We gracefully handle all four so the page keeps working when the
+ * backend renames fields. Shared by the table (ResultsCard) and the
+ * chart (ExperimentsChart) so both views always agree — including the
+ * live rows filled in from SSE `metric` events during a run.
+ */
+export function toMetricRows(results) {
+  if (!results) return [];
+  if (Array.isArray(results.models)) {
+    return results.models.map((m) => ({ name: m.name, ...m.metrics }));
+  }
+  if (results.by_model) {
+    return Object.entries(results.by_model).map(([name, metrics]) => ({
+      name,
+      ...(metrics || {}),
+    }));
+  }
+  if (results.model_comparison) {
+    // The backend's /api/v1/experiments/results returns the comparison
+    // under `model_comparison` with short keys ("xgb", "lstm", "rule",
+    // "gru"). Surface the value the user actually wants to read — the
+    // held-out test-set metrics — and fall back to the CV metrics
+    // inside `train_metrics` if a model is missing top-level fields
+    // (e.g. a freshly-retrained LSTM before its eval pass completes).
+    return Object.entries(results.model_comparison).map(([name, metrics]) => {
+      const m = metrics || {};
+      const cv = m.train_metrics || {};
+      return {
+        name,
+        accuracy: m.accuracy ?? cv.cv_accuracy,
+        precision: m.precision ?? cv.cv_precision,
+        recall: m.recall ?? cv.cv_recall,
+        f1: m.f1 ?? cv.cv_f1,
+        auc_roc: m.auc_roc ?? cv.auc_roc,
+      };
+    });
+  }
+  if (Array.isArray(results)) return results;
+  return [];
+}
 
 /**
  * Detect "no usable results yet" — an empty object, null, undefined, or
@@ -23,6 +73,20 @@ function isEmptyResults(results) {
   if (results.by_model) return Object.keys(results.by_model).length === 0;
   if (results.model_comparison) return Object.keys(results.model_comparison).length === 0;
   return true;
+}
+
+/**
+ * Human-readable evaluation-split label, driven by the actual
+ * `dataset.split_method` in the results payload. The suite uses a
+ * time-aware blocked hold-out (train/val/test ordered by date) so
+ * adjacent hourly windows can't leak across the split — never
+ * LeaveOneOut CV, which the header text used to claim.
+ */
+function splitLabel(results) {
+  const method = results?.dataset?.split_method;
+  if (method === 'time_aware_blocked') return 'time-aware held-out test';
+  if (method === 'random_stratified') return 'random stratified split';
+  return 'held-out evaluation';
 }
 
 /**
@@ -181,7 +245,7 @@ export default function Experiments() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Experiments</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            4 models · 5 metrics · LeaveOneOut CV
+            4 models · 5 metrics · {splitLabel(results)}
           </p>
         </div>
         <div className="flex gap-2">
@@ -241,7 +305,13 @@ export default function Experiments() {
       ) : !results || isEmptyResults(results) ? (
         <EmptyResults onRun={run} running={running} />
       ) : (
-        <ResultsCard results={results} />
+        <>
+          <ResultsCard results={results} />
+          <ExperimentsChart
+            rows={toMetricRows(results)}
+            bestModel={results.best_model || null}
+          />
+        </>
       )}
     </div>
   );
@@ -271,43 +341,9 @@ function EmptyResults({ onRun, running }) {
 }
 
 function ResultsCard({ results }) {
-  // `results` may be:
-  //   { by_model: { lstm: {metric: value}, xgboost: {...}, gru, rule_based }, ... }
-  //   { models: [...] }
-  //   { model_comparison: { rule, xgb, lstm, gru } }  ← SeaSID's actual shape
-  //   or a bare array of rows.
-  // We gracefully handle all four so the page keeps working when the
-  // backend renames fields.
-  let rows = [];
-  if (Array.isArray(results.models)) {
-    rows = results.models.map((m) => ({ name: m.name, ...m.metrics }));
-  } else if (results.by_model) {
-    rows = Object.entries(results.by_model).map(([name, metrics]) => ({
-      name,
-      ...(metrics || {}),
-    }));
-  } else if (results.model_comparison) {
-    // The backend's /api/v1/experiments/results returns the comparison
-    // under `model_comparison` with short keys ("xgb", "lstm", "rule",
-    // "gru"). Surface the value the user actually wants to read — the
-    // held-out test-set metrics — and fall back to the CV metrics
-    // inside `train_metrics` if a model is missing top-level fields
-    // (e.g. a freshly-retrained LSTM before its eval pass completes).
-    rows = Object.entries(results.model_comparison).map(([name, metrics]) => {
-      const m = metrics || {};
-      const cv = m.train_metrics || {};
-      return {
-        name,
-        accuracy: m.accuracy ?? cv.cv_accuracy,
-        precision: m.precision ?? cv.cv_precision,
-        recall: m.recall ?? cv.cv_recall,
-        f1: m.f1 ?? cv.cv_f1,
-        auc_roc: m.auc_roc ?? cv.auc_roc,
-      };
-    });
-  } else if (Array.isArray(results)) {
-    rows = results;
-  }
+  // Shape-normalization lives in `toMetricRows` so the table and the
+  // metric chart below it are always driven by identical rows.
+  const rows = toMetricRows(results);
 
   return (
     <Card>
@@ -317,7 +353,7 @@ function ResultsCard({ results }) {
           <CardTitle className="text-base">Model comparison</CardTitle>
         </div>
         <CardDescription>
-          Each row is a model; each column a metric from LeaveOneOut cross-validation.
+          Each row is a model; each column a metric from the {splitLabel(results)}.
           {results.best_model && (
             <>
               {' '}Current best: <span className="font-mono text-foreground">{results.best_model}</span>.

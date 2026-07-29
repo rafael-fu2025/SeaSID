@@ -435,24 +435,49 @@ def _compute_features(
 
     marine_24h and air_snapshot are optional — when None, sensible defaults
     are used (background AQI / PM2.5 and a 6-second tropical-swell period).
+
+    Every rolling window is clamped to ``(target_ts - window, target_ts]``
+    on BOTH sides. The batched caller (``build_features_for_window``) hands
+    us DataFrames spanning the whole forecast horizon plus padding, so
+    without the upper bound each hour's "trailing 24h" stats leaked future
+    forecast rows — and the unfiltered tide frame turned tide_range_24h_m
+    into the max−min over several days, pushing the rule-based current_risk
+    to High for every hour of a 48h forecast while the LSTM p_bad stayed
+    low (the "4% but HIGH" dashboard contradiction).
     """
     target_ts = _to_naive_utc(target_ts)
+    ts_48h_ago = target_ts - pd.Timedelta(hours=48)
     ts_24h_ago = target_ts - pd.Timedelta(hours=24)
     ts_3h_ago = target_ts - pd.Timedelta(hours=3)
 
-    # Split weather into windows
+    # Split weather into windows — lower AND upper bounded per target hour.
     if len(weather_48h) > 0 and "ts" in weather_48h.columns:
-        w24 = weather_48h[weather_48h["ts"] >= ts_24h_ago]
-        w3 = weather_48h[weather_48h["ts"] >= ts_3h_ago]
-        w48 = weather_48h
+        w_ts = _normalize_ts_column(weather_48h["ts"])
+        in_horizon = w_ts <= target_ts
+        w48 = weather_48h[(w_ts >= ts_48h_ago) & in_horizon]
+        w24 = weather_48h[(w_ts >= ts_24h_ago) & in_horizon]
+        w3 = weather_48h[(w_ts >= ts_3h_ago) & in_horizon]
     else:
         w24 = weather_48h
         w3 = weather_48h
         w48 = weather_48h
 
+    # Tides — previously passed through unfiltered, so the batched path
+    # computed tide max/min/range over the entire fetched span.
+    t24 = tide_24h
+    if len(tide_24h) > 0 and "ts" in tide_24h.columns:
+        t_ts = _normalize_ts_column(tide_24h["ts"])
+        t24 = tide_24h[(t_ts >= ts_24h_ago) & (t_ts <= target_ts)]
+
+    # Marine — same per-hour clamp for wave_period_s_mean.
+    m24 = marine_24h
+    if marine_24h is not None and len(marine_24h) > 0 and "ts" in marine_24h.columns:
+        m_ts = _normalize_ts_column(marine_24h["ts"])
+        m24 = marine_24h[(m_ts >= ts_24h_ago) & (m_ts <= target_ts)]
+
     return _compute_features_from_dfs(
-        w24, w48, w3, tide_24h, site_key,
-        marine_24h=marine_24h,
+        w24, w48, w3, t24, site_key,
+        marine_24h=m24,
         air_snapshot=air_snapshot,
     )
 

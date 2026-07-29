@@ -135,16 +135,74 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 MARINE_ARCHIVE_URL = "https://marine-api.open-meteo.com/v1/marine"  # supports past_days
 
 
+def fetch_marine_archive(
+    lat: float,
+    lon: float,
+    start_date: str,
+    end_date: str,
+) -> dict[datetime, dict]:
+    """
+    Pull historical hourly marine data from the Open-Meteo Marine endpoint.
+
+    The marine host serves full history via ``start_date`` / ``end_date`` (not
+    just a rolling ``past_days`` window): wave_height, wave_period and
+    sea_surface_temperature are populated back to ~2022 (SST is null before
+    ~2023 and simply falls back to climatology downstream).
+
+    Returns a dict keyed by tz-aware UTC timestamp so callers can merge marine
+    fields into the weather rows by hour. Empty dict on total failure.
+    """
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "wave_height,wave_period,sea_surface_temperature",
+        "start_date": start_date,
+        "end_date": end_date,
+        "timezone": "UTC",
+    }
+    data = _retry_get(MARINE_ARCHIVE_URL, params, label="Open-Meteo Marine Archive")
+    if data is None:
+        logger.warning("Marine archive API failed — waves/sea-temp will be empty")
+        return {}
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    wave_height = hourly.get("wave_height", [])
+    wave_period = hourly.get("wave_period", [])
+    sea_temp = hourly.get("sea_surface_temperature", [])
+
+    out: dict[datetime, dict] = {}
+    for i, t in enumerate(times):
+        ts = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
+        out[ts] = {
+            "wave_height_m": _safe_float(wave_height, i, default=None),
+            "wave_period_s": _safe_float(wave_period, i, default=None),
+            "sea_temp_c": _safe_float(sea_temp, i, default=None),
+        }
+    logger.info("Fetched %d marine archive hours for (%.4f, %.4f) [%s → %s]",
+                len(out), lat, lon, start_date, end_date)
+    return out
+
+
 def fetch_archive(
     lat: float,
     lon: float,
     start_date: str,
     end_date: str,
+    allow_synthetic: bool = True,
 ) -> list[dict]:
     """
-    Pull historical hourly weather from Open-Meteo Archive API.
+    Pull historical hourly weather from Open-Meteo Archive API and merge
+    historical marine data (wave_height + sea_surface_temperature) so the
+    archive path produces real waves and sea temperature instead of zeros.
+
     start_date / end_date format: 'YYYY-MM-DD'.
-    Returns same shape as fetch_forecast.
+    Returns same shape as fetch_forecast, plus a ``wave_period_s`` key carried
+    for downstream MarineObs persistence.
+
+    When ``allow_synthetic`` is False, a failed API call returns an empty list
+    instead of fabricated data — used by the real-dataset build so a transient
+    network failure never pollutes the training set with synthetic weather.
     """
     params = {
         "latitude": lat,
@@ -157,8 +215,14 @@ def fetch_archive(
     data = _retry_get(ARCHIVE_URL, params, label="Open-Meteo Archive")
 
     if data is None:
+        if not allow_synthetic:
+            logger.warning("Archive API failed — returning empty (synthetic disabled)")
+            return []
         logger.warning("Archive API failed — using synthetic fallback")
         return _synthetic_archive(lat, lon, start_date, end_date)
+
+    # Marine augmentation (waves + sea temp) keyed by hour; empty on failure.
+    marine = fetch_marine_archive(lat, lon, start_date, end_date)
 
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
@@ -168,17 +232,20 @@ def fetch_archive(
 
     rows = []
     for i, t in enumerate(times):
+        ts = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
+        m = marine.get(ts, {})
         rows.append({
-            "ts": datetime.fromisoformat(t).replace(tzinfo=timezone.utc),
+            "ts": ts,
             "precip_mm": _safe_float(precip, i),
             "wind_max_kmh": _safe_float(wind_gusts, i),
             "wind_mean_kmh": _safe_float(wind_speed, i),
-            "wave_max_m": 0.0,   # archive may not have marine data
-            "sea_temp_c": None,
+            "wave_max_m": m.get("wave_height_m") or 0.0,
+            "sea_temp_c": m.get("sea_temp_c"),
+            "wave_period_s": m.get("wave_period_s"),
         })
 
-    logger.info("Fetched %d archive hours for (%.4f, %.4f) [%s → %s]",
-                len(rows), lat, lon, start_date, end_date)
+    logger.info("Fetched %d archive hours for (%.4f, %.4f) [%s → %s] (marine=%d)",
+                len(rows), lat, lon, start_date, end_date, len(marine))
     return rows
 
 

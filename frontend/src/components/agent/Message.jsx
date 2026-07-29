@@ -69,7 +69,7 @@ function UserMessage({ message }) {
         </div>
       )}
       {hasContent && (
-        <div className="max-w-[88%] whitespace-pre-wrap break-words border border-border bg-card p-2.5 text-sm text-foreground">
+        <div className="max-w-[88%] whitespace-pre-wrap break-words border border-border bg-card p-2.5 text-xs text-foreground">
           {message.content}
         </div>
       )}

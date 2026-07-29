@@ -19,15 +19,22 @@ from app.lib.db import init_db
 from app.lib.features import FEATURE_COLUMNS, build_features, build_sequence
 from app.lib.scoring import label_to_binary
 from app.lib.experiments import run_full_experiment_suite
+from scripts.train_model import EXCLUDED_SOURCES_DEFAULT
 
 
 def main():
     init_db()
 
-    # Load all labels
+    # Load labels, excluding the circular rule-generated sources so the
+    # held-out metrics reflect real/threshold-grounded data (matches
+    # scripts.train_model). See the "Accurate Dive Model Rebuild" plan.
     db = _db_mod.SessionLocal()
     try:
-        labels = db.query(_db_mod.NoDiveLabel).all()
+        labels = (
+            db.query(_db_mod.NoDiveLabel)
+            .filter(_db_mod.NoDiveLabel.source.notin_(EXCLUDED_SOURCES_DEFAULT))
+            .all()
+        )
     finally:
         db.close()
 
@@ -35,11 +42,14 @@ def main():
         print("ERROR: No labels found. Run seed_history.py and expand_dataset.py first.")
         sys.exit(1)
 
+    print(f"Excluding label sources: {', '.join(EXCLUDED_SOURCES_DEFAULT)}")
     print(f"Loading {len(labels)} labels...")
 
     X_rows = []
     y_vals = []
     X_seqs = []
+    label_dates = []
+    label_site_keys = []
     skipped = 0
 
     for lbl in labels:
@@ -55,6 +65,8 @@ def main():
             X_seqs.append(seq)
 
             y_vals.append(label_to_binary(lbl.label))
+            label_dates.append(lbl.date)
+            label_site_keys.append(lbl.site_key)
         except Exception:
             skipped += 1
 
@@ -68,8 +80,13 @@ def main():
 
     print(f"Dataset ready: {len(X_flat)} samples")
 
-    # Run experiments
-    results = run_full_experiment_suite(X_flat, y, X_seq, y_arr)
+    # Pass label_dates + site keys so the suite uses the time-aware blocked
+    # split (70/15/15, purge_days=1) instead of the leaky random split.
+    results = run_full_experiment_suite(
+        X_flat, y, X_seq, y_arr,
+        label_dates=label_dates,
+        label_site_keys=label_site_keys,
+    )
 
     # Print summary
     print("\n" + "=" * 60)
@@ -77,6 +94,16 @@ def main():
     print("=" * 60)
 
     comp = results.get("model_comparison", {})
+    ds = results.get("dataset", {})
+    print(f"\nSplit: {ds.get('split_method')}  "
+          f"train={ds.get('train_size')} val={ds.get('val_size')} test={ds.get('test_size')}  "
+          f"pos_ratio={ds.get('positive_ratio', 0):.3f}")
+    b = ds.get("boundaries", {})
+    if b.get("test"):
+        print(f"  test window: {b['test'].get('start')} -> {b['test'].get('end')} "
+              f"(n={b['test'].get('count')})")
+    if ds.get("per_site"):
+        print(f"  per-site test counts: {ds['per_site']}")
     print(f"\n{'Model':<10} {'Accuracy':>10} {'Precision':>10} {'Recall':>10} {'F1':>10} {'AUC-ROC':>10}")
     print("-" * 60)
     for model_name, metrics in comp.items():

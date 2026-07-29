@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 
 from app.lib import db
@@ -285,12 +286,19 @@ def ingest_site(site_key: str, hours: int = 48, archive_days: int = 7) -> dict:
     }
 
 
-def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
+def ingest_archive(site_key: str, start_date: str, end_date: str,
+                   allow_synthetic: bool = True) -> dict:
     """
-    Pull historical weather from Open-Meteo Archive and store in DB.
+    Pull historical weather + marine from Open-Meteo Archive and store in DB.
     Used by expand_dataset.py for training data expansion.
 
-    Returns {"weather_rows": int}.
+    The archive rows now carry real wave_height, sea_surface_temperature and
+    wave_period (see weather.fetch_archive), so we persist waves + sea temp
+    into WeatherObs and the dominant wave period into MarineObs. That makes the
+    wave_max_24h_m, sea_temp_mean_24h and wave_period_s_mean features real over
+    the whole historical window instead of climatological defaults.
+
+    Returns {"weather_rows": int, "marine_rows": int}.
     """
     from app.lib.weather import fetch_archive
 
@@ -299,19 +307,18 @@ def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
         raise ValueError(f"Unknown site key: {site_key}")
 
     lat, lon = site["lat"], site["lon"]
-    weather_rows = fetch_archive(lat, lon, start_date, end_date)
+    weather_rows = fetch_archive(lat, lon, start_date, end_date,
+                                 allow_synthetic=allow_synthetic)
     if not weather_rows:
-        return {"weather_rows": 0}
+        return {"weather_rows": 0, "marine_rows": 0}
 
+    # Upsert-with-update so cached rows that were stored by the old archive
+    # path (wave_max_m=0.0, sea_temp_c=NULL) get backfilled with the real
+    # marine values now available. We keep the larger wave and prefer a
+    # non-null sea temp, so a transient marine miss never clobbers real data.
     session = db.SessionLocal()
     try:
-        ts_values = [row["ts"] for row in weather_rows]
-        existing_ts = _existing_ts(session, db.WeatherObs, site_key, ts_values)
-        new_rows = [r for r in weather_rows if _naive_utc(r["ts"]) not in existing_ts]
-        if not new_rows:
-            return {"weather_rows": 0}
-
-        for row in new_rows:
+        for row in weather_rows:
             stmt = sqlite_upsert(db.WeatherObs).values(
                 site_key=site_key,
                 ts=row["ts"],
@@ -320,18 +327,45 @@ def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
                 wind_mean_kmh=row["wind_mean_kmh"],
                 wave_max_m=row["wave_max_m"],
                 sea_temp_c=row["sea_temp_c"],
-            ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
+                source="open_meteo_archive",
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["site_key", "ts"],
+                set_={
+                    "wave_max_m": func.max(
+                        db.WeatherObs.wave_max_m, stmt.excluded.wave_max_m
+                    ),
+                    "sea_temp_c": func.coalesce(
+                        stmt.excluded.sea_temp_c, db.WeatherObs.sea_temp_c
+                    ),
+                },
+            )
             session.execute(stmt)
         session.commit()
-        inserted = len(new_rows)
+        inserted = len(weather_rows)
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
 
+    # Persist marine augmentation (wave height / period / sea temp) so the
+    # wave_period_s_mean feature is real for the historical window too.
+    marine_rows = [
+        {
+            "ts": row["ts"],
+            "wave_height_m": row.get("wave_max_m"),
+            "wave_period_s": row.get("wave_period_s"),
+            "water_temp_c": row.get("sea_temp_c"),
+            "source": "open_meteo_archive",
+        }
+        for row in weather_rows
+        if row.get("wave_period_s") is not None
+    ]
+    marine_inserted = _persist_marine(site_key, marine_rows)
+
     logger.info(
-        "Archive ingested site=%s: %d weather rows [%s → %s]",
-        site_key, inserted, start_date, end_date,
+        "Archive ingested site=%s: %d weather rows, %d marine rows [%s → %s]",
+        site_key, inserted, marine_inserted, start_date, end_date,
     )
-    return {"weather_rows": inserted}
+    return {"weather_rows": inserted, "marine_rows": marine_inserted}

@@ -237,6 +237,97 @@ def test_resolve_key_none_when_nothing(monkeypatch):
     assert provider_keys.resolve_mcp_minimax_key() == (None, None)
 
 
+# ── Boot-failure key hygiene ──────────────────────────────────────────────
+#
+# The MCP shares the LLM provider key by default. A *local* boot failure
+# (missing uvx, selector-loop NotImplementedError, spawn error) used to
+# call mark_provider_error on that shared key, putting agent chat itself
+# on a 5-minute cooldown — the "key stops working after a refresh until I
+# re-enter it" bug. Only an upstream auth rejection may blame the key.
+
+
+@pytest.mark.asyncio
+async def test_local_boot_failure_does_not_cooldown_shared_llm_key(monkeypatch):
+    from app.lib import agent_mcp, provider_keys
+
+    created = provider_keys.create_provider_key(
+        provider="llm", label="shared", value="sk-shared"
+    )
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    agent_mcp.invalidate_cache()
+
+    async def _fail_spawn(api_key):
+        raise agent_mcp.McpConnectionError("`uvx` is not on PATH.")
+
+    monkeypatch.setattr(agent_mcp, "_spawn_session", _fail_spawn)
+    try:
+        session, tools = await agent_mcp.ensure_booted()
+        assert session is None and tools == []
+
+        row = next(
+            k for k in provider_keys.list_provider_keys(provider="llm")
+            if k["id"] == created["id"]
+        )
+        assert row["cooldown_until"] is None, "local failures must not cooldown the key"
+        assert row["error_count"] == 0
+    finally:
+        provider_keys.delete_provider_key(created["id"])
+        agent_mcp.invalidate_cache()
+
+
+@pytest.mark.asyncio
+async def test_auth_boot_failure_marks_shared_llm_key(monkeypatch):
+    from app.lib import agent_mcp, provider_keys
+
+    created = provider_keys.create_provider_key(
+        provider="llm", label="shared", value="sk-shared"
+    )
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    agent_mcp.invalidate_cache()
+
+    async def _fail_spawn(api_key):
+        raise agent_mcp.McpConnectionError("401 invalid api key (2049)")
+
+    monkeypatch.setattr(agent_mcp, "_spawn_session", _fail_spawn)
+    try:
+        session, tools = await agent_mcp.ensure_booted()
+        assert session is None and tools == []
+
+        row = next(
+            k for k in provider_keys.list_provider_keys(provider="llm")
+            if k["id"] == created["id"]
+        )
+        assert row["error_count"] == 1
+        assert row["cooldown_until"] is not None
+    finally:
+        provider_keys.delete_provider_key(created["id"])
+        agent_mcp.invalidate_cache()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows selector-loop guard")
+def test_run_mcp_spawns_subprocess_under_selector_loop():
+    """scripts/run_api.py runs uvicorn on a SelectorEventLoop, which cannot
+    spawn subprocesses (bare NotImplementedError). `_run_mcp` must route
+    the spawn onto the dedicated proactor loop so the MCP still boots."""
+    from app.lib import agent_mcp
+
+    async def _spawn_echo():
+        proc = await asyncio.create_subprocess_exec(
+            "cmd", "/c", "echo hi",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+        return out.decode().strip()
+
+    loop = asyncio.SelectorEventLoop()
+    try:
+        result = loop.run_until_complete(agent_mcp._run_mcp(_spawn_echo()))
+    finally:
+        loop.close()
+    assert result == "hi"
+
+
 # ── Time-anchored reminder ────────────────────────────────────────────────
 #
 # The agent has no live clock. Without a "today is …" injection it answers

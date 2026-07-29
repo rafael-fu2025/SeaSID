@@ -13,11 +13,21 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-const ROLE_BADGE = {
-  admin: 'bg-reef/15 text-reef border-reef/40',
-  data_steward: 'bg-amber/15 text-amber border-amber/40',
-  operator: 'bg-emerald/15 text-emerald border-emerald/40',
-  viewer: 'bg-muted text-muted-foreground border-border',
+// Friendly role names shown under the username. The raw role keys
+// ("admin", "data_steward", …) stay in the auth payload only.
+const ROLE_LABELS = {
+  admin: 'Administrator',
+  data_steward: 'Data Steward',
+  operator: 'Operator',
+  viewer: 'Viewer',
+};
+
+// Subtle per-role text tint — replaces the old bordered pill badge.
+const ROLE_TEXT = {
+  admin: 'text-reef',
+  data_steward: 'text-amber',
+  operator: 'text-emerald',
+  viewer: 'text-muted-foreground',
 };
 
 export default function UserMenu({ variant = 'sidebar' }) {
@@ -31,7 +41,8 @@ export default function UserMenu({ variant = 'sidebar' }) {
     return null;
   }
 
-  const roleClass = ROLE_BADGE[user.role] || ROLE_BADGE.viewer;
+  const roleLabel = ROLE_LABELS[user.role] || user.role;
+  const roleText = ROLE_TEXT[user.role] || ROLE_TEXT.viewer;
 
   function handleSignOut() {
     // Close the dropdown first so the dialog is rendered against a clean
@@ -57,7 +68,7 @@ export default function UserMenu({ variant = 'sidebar' }) {
           className={
             compact
               ? 'flex size-9 items-center justify-center self-center rounded-full border border-border bg-card text-xs font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-              : 'flex w-full items-center gap-3 rounded-md border border-border bg-card/60 px-3 py-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+              : 'flex w-full items-center gap-3 rounded-full border border-border bg-card/60 py-1.5 pl-1.5 pr-4 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
           }
         >
           <span className={
@@ -70,8 +81,8 @@ export default function UserMenu({ variant = 'sidebar' }) {
           {compact ? null : (
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-foreground">{user.username}</span>
-              <span className={'mt-0.5 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' + roleClass}>
-                {user.role}
+              <span className={'block truncate text-[10px] font-medium ' + roleText}>
+                {roleLabel}
               </span>
             </span>
           )}
@@ -85,12 +96,10 @@ export default function UserMenu({ variant = 'sidebar' }) {
         collisionPadding={8}
         className="w-56"
       >
-        <DropdownMenuLabel className="flex flex-col gap-1">
+        <DropdownMenuLabel className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">{user.username}</span>
-          <span
-            className={`inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${roleClass}`}
-          >
-            {user.role}
+          <span className={`text-[10px] font-medium ${roleText}`}>
+            {roleLabel}
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />

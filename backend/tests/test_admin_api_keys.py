@@ -166,13 +166,23 @@ def test_provider_keys_pick_rotates_and_skips_disabled(db_session, monkeypatch):
     assert picked.id == a.id, "disabled key should be skipped"
     assert picked.value == "sk-test-AAAA"
 
-    # Mark the active one as recently errored past the threshold.
+    # Mark the active one as errored with an active cooldown: skipped.
+    from datetime import datetime, timedelta, timezone
     a.error_count = 10  # >= MAX_RECENT_ERRORS=3
+    a.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=5)
     db_session.commit()
 
     picked_again = provider_keys.pick_provider_key("llm")
     # Only backup remains but it's disabled; nothing usable.
     assert picked_again is None
+
+    # Once the cooldown lapses the key gets a half-open retry — a high
+    # error_count alone must not lock it out until re-entry.
+    a.cooldown_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.commit()
+    half_open = provider_keys.pick_provider_key("llm")
+    assert half_open is not None
+    assert half_open.id == a.id
 
     updated = provider_keys.update_provider_key(a.id, value="sk-test-UPDATED")
     assert updated is not None

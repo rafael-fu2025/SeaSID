@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertTriangle, ChevronDown, Clock3, Database, RefreshCw, Sparkles,
 } from 'lucide-react';
-import { api } from '@/api';
+import { api, streamBriefing } from '@/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,10 @@ import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
 import MarkdownResponse from '@/components/MarkdownResponse';
+import { StreamingDots } from '@/components/agent/StreamingDots';
+import {
+  makeThinkingState, feedThinking, flushThinking,
+} from '@/components/agent/streaming-thinking';
 import {
   clearForecastCache, readForecastCache, writeForecastCache,
 } from '@/lib/forecastCache';
@@ -33,6 +37,8 @@ const fmt = (value, unit) => {
 export default function Forecast() {
   const [selectedSite, setSelectedSite] = useState('dauin_muck');
   const [briefing, setBriefing] = useState(null);
+  const [briefingStreaming, setBriefingStreaming] = useState(false);
+  const [briefingError, setBriefingError] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [windowHours, setWindowHours] = useState(48);
   const [cacheAge, setCacheAge] = useState(null);
@@ -40,10 +46,15 @@ export default function Forecast() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const requestRef = useRef(0);
+  // AbortController for the in-flight briefing stream so a site switch,
+  // manual refresh, or unmount can cancel it instead of letting stale
+  // deltas race the new request.
+  const streamRef = useRef(null);
 
   const load = useCallback(async (siteKey, { force = false } = {}) => {
     const requestId = ++requestRef.current;
     setError(null);
+    setBriefingError(null);
     if (!force) {
       const cached = readForecastCache(siteKey);
       if (cached) {
@@ -54,30 +65,115 @@ export default function Forecast() {
         return;
       }
     }
-    try {
-      const [nextBriefing, nextForecast] = await Promise.all([
-        api.getBriefing(siteKey),
-        api.getForecast(siteKey, 48),
-      ]);
-      if (requestRef.current !== requestId) return;
-      setBriefing(nextBriefing);
-      setForecast(nextForecast);
-      setCacheAge(0);
-      writeForecastCache(siteKey, {
-        briefing: nextBriefing,
-        forecast: nextForecast,
+
+    streamRef.current?.abort();
+    const controller = new AbortController();
+    streamRef.current = controller;
+
+    setBriefing(null);
+    setBriefingStreaming(true);
+
+    // The numeric forecast is fast (LSTM inference) while the briefing is a
+    // slow LLM turn — fetch them independently so the charts render the
+    // moment the forecast lands instead of blocking on the agent.
+    const forecastPromise = api.getForecast(siteKey, 48)
+      .then((next) => {
+        if (requestRef.current !== requestId) return null;
+        setForecast(next);
+        setCacheAge(0);
+        setLoading(false);
+        return next;
+      })
+      .catch((err) => {
+        if (requestRef.current === requestId) setError(err.message);
+        return null;
       });
+
+    // Assemble the briefing incrementally from the SSE stream. `draft`
+    // mirrors the blocking BriefingResponse shape ({response, tool_calls})
+    // so the render path and the forecast cache stay format-compatible.
+    const draft = { response: '', tool_calls: [], site_key: siteKey, type: 'briefing' };
+    const think = makeThinkingState();
+    let failed = false;
+    const pushDraft = () => {
+      setBriefing({ ...draft, tool_calls: [...draft.tool_calls] });
+      setLoading(false);
+    };
+
+    try {
+      for await (const ev of streamBriefing({ siteKey, signal: controller.signal })) {
+        if (requestRef.current !== requestId) break;
+        switch (ev.type) {
+          case 'text': {
+            // Route <think> blocks out of the visible briefing with the
+            // same state machine the agent chat uses (the blocking
+            // endpoint strips them server-side via strip_internal_thoughts).
+            const split = feedThinking(think, ev.delta);
+            if (split.visible) {
+              draft.response += split.visible;
+              pushDraft();
+            }
+            break;
+          }
+          case 'tool_call':
+            draft.tool_calls.push({ id: ev.id, name: ev.name, arguments: ev.arguments });
+            pushDraft();
+            break;
+          case 'tool_result':
+            draft.tool_calls = draft.tool_calls.map((tc) =>
+              tc.id === ev.id ? { ...tc, result: ev.output } : tc,
+            );
+            pushDraft();
+            break;
+          case 'done': {
+            const tail = flushThinking(think);
+            if (tail.visible) draft.response += tail.visible;
+            // The terminal event carries the consolidated tool log in the
+            // exact {name, arguments, result} shape the blocking endpoint
+            // returns — prefer it over our incrementally-patched list.
+            if (Array.isArray(ev.tool_calls) && ev.tool_calls.length > 0) {
+              draft.tool_calls = ev.tool_calls;
+            }
+            pushDraft();
+            break;
+          }
+          case 'error':
+            failed = true;
+            if (requestRef.current === requestId) {
+              setBriefingError(ev.message || 'Briefing unavailable');
+            }
+            break;
+          default:
+            break;
+        }
+      }
     } catch (err) {
-      if (requestRef.current === requestId) setError(err.message);
+      if (err?.name !== 'AbortError' && requestRef.current === requestId) {
+        failed = true;
+        setBriefingError(err.message);
+      }
     } finally {
-      if (requestRef.current === requestId) setLoading(false);
+      if (requestRef.current === requestId) setBriefingStreaming(false);
+      if (streamRef.current === controller) streamRef.current = null;
+    }
+
+    const nextForecast = await forecastPromise;
+    if (requestRef.current !== requestId) return;
+    setLoading(false);
+    // Cache only complete, successful snapshots so a half-streamed or
+    // errored briefing never gets restored as if it were finished.
+    if (!failed && draft.response && nextForecast) {
+      writeForecastCache(siteKey, { briefing: draft, forecast: nextForecast });
     }
   }, []);
 
   useEffect(() => {
     setLoading(true);
     load(selectedSite);
-    return () => { requestRef.current += 1; };
+    return () => {
+      requestRef.current += 1;
+      streamRef.current?.abort();
+    };
   }, [selectedSite, load]);
 
   useEffect(() => {
@@ -110,7 +206,12 @@ export default function Forecast() {
           <p className="mt-1 text-sm text-muted-foreground">
             AI guidance and LSTM risk outlook for the next 48 hours.
           </p>
-          {briefing && (
+          {briefingStreaming ? (
+            <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Database className="size-3 text-reef" aria-hidden />
+              Briefing streaming live…
+            </p>
+          ) : briefing && (
             <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Database className="size-3 text-reef" aria-hidden />
               {cacheAge > 0
@@ -165,9 +266,35 @@ export default function Forecast() {
                 <CardDescription>Generated from live tools and the active LSTM forecast.</CardDescription>
               </CardHeader>
               <CardContent>
-                {briefing?.response
-                  ? <MarkdownResponse>{briefing.response}</MarkdownResponse>
-                  : <p className="text-sm text-muted-foreground">No briefing returned.</p>}
+                {briefing?.response ? (
+                  <>
+                    <MarkdownResponse>{briefing.response}</MarkdownResponse>
+                    {briefingStreaming && (
+                      <div
+                        className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"
+                        data-testid="briefing-streaming"
+                      >
+                        <StreamingDots />
+                        <span>Writing…</span>
+                      </div>
+                    )}
+                  </>
+                ) : briefingStreaming ? (
+                  <div
+                    className="flex items-center gap-2 text-sm text-muted-foreground"
+                    data-testid="briefing-streaming"
+                  >
+                    <StreamingDots />
+                    <span>Generating briefing…</span>
+                  </div>
+                ) : briefingError ? (
+                  <p className="text-sm text-muted-foreground">
+                    <span className="font-medium text-danger">Briefing unavailable.</span>{' '}
+                    {briefingError}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No briefing returned.</p>
+                )}
                 <div className="mt-4 flex flex-wrap gap-1.5 border-t border-border pt-3">
                   {(briefing?.tool_calls || []).map((tool, index) => (
                     <Badge key={`${tool.name}-${index}`} variant="secondary" className="font-mono text-[10px]">

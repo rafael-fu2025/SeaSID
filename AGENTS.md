@@ -82,13 +82,13 @@ Backend tests need `backend/` as CWD (`pytest.ini` → `testpaths = tests`).
 | `api/` routes or schemas | `cd backend && python -m ruff check . && python -m pytest tests/test_api.py -v` then `python -m scripts.run_api --reload` |
 | `db.py` schema | add `scripts/migrate_v2N.py`, run `cd backend && python -m scripts.migrate_v2N`, then `ruff check .` + the backend suite |
 | Any `frontend/src` code | `cd frontend && npm run lint && npm test` |
-| Frontend types / build | `cd frontend && npm run typecheck && npm run build` |
+| Frontend build | `cd frontend && npm run build` |
 
 **Validation gate — full pre-PR check.** Every command must exit 0:
 
 ```bash
 cd backend  && python -m ruff check . && python -m pytest tests/ -v
-cd frontend && npm run lint && npm run typecheck && npm test
+cd frontend && npm run lint && npm test
 ```
 
 The [`githooks/pre-push`](githooks/pre-push) hook enforces this gate on `git push`

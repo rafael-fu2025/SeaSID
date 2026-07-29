@@ -1,5 +1,37 @@
 import '@testing-library/jest-dom/vitest';
 
+// Node >= 22 ships an experimental global `localStorage` (Web Storage
+// backed by `--localstorage-file`). Under Vitest's jsdom environment the
+// Node global shadows jsdom's working implementation, leaving a
+// localStorage whose methods are not callable functions — so anything
+// touching storage (forecastCache, auth tokens) explodes with
+// "localStorage.clear is not a function". Detect the broken shape and
+// install a plain in-memory Storage stand-in on both window and
+// globalThis so tests behave the same on every Node version.
+if (typeof window !== 'undefined'
+    && typeof window.localStorage?.clear !== 'function') {
+  const makeMemoryStorage = () => {
+    let store = new Map();
+    return {
+      get length() { return store.size; },
+      key: (i) => [...store.keys()][i] ?? null,
+      getItem: (k) => (store.has(String(k)) ? store.get(String(k)) : null),
+      setItem: (k, v) => { store.set(String(k), String(v)); },
+      removeItem: (k) => { store.delete(String(k)); },
+      clear: () => { store = new Map(); },
+    };
+  };
+  Object.defineProperty(window, 'localStorage', {
+    value: makeMemoryStorage(), configurable: true,
+  });
+  Object.defineProperty(window, 'sessionStorage', {
+    value: makeMemoryStorage(), configurable: true,
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: window.localStorage, configurable: true,
+  });
+}
+
 // jsdom (the Vitest default for `environment: 'jsdom'`) doesn't ship a
 // ResizeObserver implementation, but react-resizable-panels and several
 // Radix primitives rely on one. Provide a no-op stub so render-time

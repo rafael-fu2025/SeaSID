@@ -181,7 +181,7 @@ const ChatComposer = forwardRef(function ChatComposer({
     const el = taRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const lineHeight = 22; // matches leading-relaxed at text-sm
+    const lineHeight = 20; // matches leading-relaxed at text-xs
     const max = lineHeight * maxRows + 16; // +padding
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
@@ -436,7 +436,7 @@ const ChatComposer = forwardRef(function ChatComposer({
             aria-label="Message the agent"
             data-testid="agent-input"
             className={cn(
-              'w-full resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-relaxed',
+              'w-full resize-none border-0 bg-transparent px-1 py-1.5 text-xs leading-relaxed',
               'placeholder:text-black/70 dark:placeholder:text-white/70',
               'focus:outline-none focus:ring-0',
               'disabled:cursor-not-allowed disabled:opacity-60',

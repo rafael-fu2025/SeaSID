@@ -8,14 +8,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart, SkeletonProvenance, SkeletonOptimalWindow, SkeletonFooter } from '@/components/Skeleton';
+import { Skeleton, SkeletonKpiStrip, SkeletonForecastGrid, SkeletonChart, SkeletonOptimalWindow, SkeletonFooter } from '@/components/Skeleton';
 import ForecastCard from '@/components/ForecastCard';
 import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
-import { ForecastProvenance } from '@/components/ForecastProvenance';
 import ActiveLearningNudge from '@/components/ActiveLearningNudge';
-import { cn } from '@/lib/utils';
+import {
+  clearDashboardCache, readDashboardCache, writeDashboardCache,
+} from '@/lib/forecastCache';
+import { cn, formatModelVersion } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
 
@@ -58,9 +60,21 @@ export default function Dashboard() {
   const [timelinePage, setTimelinePage] = useState(0);
   const cancelRef = useRef(false);
 
-  const load = useCallback(async (siteKey) => {
+  const load = useCallback(async (siteKey, { force = false } = {}) => {
     cancelRef.current = false;
     setError(null);
+    // Rehydrate from the per-site cache first so a route swap (e.g.
+    // Dashboard → Settings → Dashboard) doesn't flash skeletons and
+    // refetch data that is seconds old. Explicit refreshes force past it.
+    if (!force) {
+      const cached = readDashboardCache(siteKey);
+      if (cached?.forecast) {
+        setForecast(cached.forecast);
+        setAlerts(cached.alerts || []);
+        setLoading(false);
+        return;
+      }
+    }
     try {
       const [fc, al] = await Promise.all([
         api.getForecast(siteKey, 48),
@@ -69,6 +83,7 @@ export default function Dashboard() {
       if (cancelRef.current) return;
       setForecast(fc);
       setAlerts(al.alerts || []);
+      writeDashboardCache(siteKey, { forecast: fc, alerts: al.alerts || [] });
     } catch (err) {
       if (!cancelRef.current) setError(err.message);
     } finally {
@@ -86,16 +101,18 @@ export default function Dashboard() {
   // ⌘K palette "refresh" event
   useEffect(() => {
     const handler = () => {
+      clearDashboardCache(selectedSite);
       setRefreshing(true);
-      load(selectedSite).finally(() => setRefreshing(false));
+      load(selectedSite, { force: true }).finally(() => setRefreshing(false));
     };
     window.addEventListener('seasid:refresh', handler);
     return () => window.removeEventListener('seasid:refresh', handler);
   }, [selectedSite, load]);
 
   const refresh = () => {
+    clearDashboardCache(selectedSite);
     setRefreshing(true);
-    load(selectedSite).finally(() => setRefreshing(false));
+    load(selectedSite, { force: true }).finally(() => setRefreshing(false));
   };
 
   const currentHour = forecast?.hours?.[0];
@@ -187,18 +204,21 @@ export default function Dashboard() {
       {!loading && selectedSite && (
         <ActiveLearningNudge
           siteKey={selectedSite}
-          onVerified={() => load(selectedSite)}
+          onVerified={() => {
+            // A new operator label changes the forecast — bypass the cache.
+            clearDashboardCache(selectedSite);
+            load(selectedSite, { force: true });
+          }}
         />
       )}
 
       {/* Loading skeletons — mirror the post-swap container order:
-          KPI strip → Probability chart → Forecast provenance →
-          Timeline grid → Optimal-window summary → Footer. */}
+          KPI strip → Probability chart → Timeline grid →
+          Optimal-window summary → Footer. */}
       {loading && !forecast && (
         <div className="flex flex-col gap-6">
           <SkeletonKpiStrip count={5} />
           <SkeletonChart />
-          <SkeletonProvenance />
           <SkeletonForecastGrid count={12} />
           <SkeletonOptimalWindow />
           <SkeletonFooter />
@@ -261,7 +281,7 @@ export default function Dashboard() {
             label="Model in use"
             value={
               <span className="text-base font-medium text-foreground">
-                {forecast?.model_version ?? currentHour.model_used ?? '—'}
+                {formatModelVersion(forecast?.model_version ?? currentHour.model_used) ?? '—'}
               </span>
             }
             sub={forecast?.ml_bundle_loaded ? 'Bundle loaded' : 'Heuristic fallback'}
@@ -353,19 +373,6 @@ export default function Dashboard() {
             )}
           </div>
         </section>
-      )}
-
-      {/* Provenance strip (roadmap #8) — answers "how old?", "which source?",
-          "which model?" from the same screen as the KPIs. */}
-      {!loading && forecast && (
-        <ForecastProvenance
-          dataAsOf={forecast.data_as_of}
-          freshness={forecast.freshness}
-          providers={forecast.providers}
-          modelVersion={forecast.model_version}
-          generatedAt={forecast.generated_at}
-          compact
-        />
       )}
 
       {/* Optimal window summary */}

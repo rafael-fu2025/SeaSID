@@ -30,19 +30,33 @@ XGB_MODEL_PATH = DATA_DIR / "seasid_xgb.pkl"
 METRICS_PATH = DATA_DIR / "seasid_metrics.json"
 
 
-def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarray]:
+# Label sources that are circular (machine-generated from the same rule the
+# model is meant to learn) and are excluded from training by default. See the
+# "Accurate Dive Model Rebuild" plan: we train on real/threshold-labelled data,
+# not on the rule-based scorer's own output.
+EXCLUDED_SOURCES_DEFAULT = ("synthetic_rule", "archive_synthetic_archive")
+
+
+def _load_training_data(exclude_sources: tuple[str, ...] = EXCLUDED_SOURCES_DEFAULT):
     """
     Load labels from DB and build feature matrices for both XGBoost and LSTM.
 
+    Labels whose ``source`` is in ``exclude_sources`` are dropped so the models
+    do not simply re-learn the rule-based scorer that generated them.
+
     Returns:
-        X_flat: (n_samples, 11) DataFrame for XGBoost
+        X_flat: (n_samples, 14) DataFrame for XGBoost
         y: (n_samples,) Series of binary labels
-        X_seq: (n_samples, seq_len, 11) ndarray for LSTM
+        X_seq: (n_samples, seq_len, 14) ndarray for LSTM
         y_arr: (n_samples,) ndarray of binary labels
+        label_dates: list of dates for the time-aware split
     """
     db = _db_mod.SessionLocal()
     try:
-        labels = db.query(_db_mod.NoDiveLabel).all()
+        query = db.query(_db_mod.NoDiveLabel)
+        if exclude_sources:
+            query = query.filter(_db_mod.NoDiveLabel.source.notin_(exclude_sources))
+        labels = query.all()
     finally:
         db.close()
 
@@ -50,6 +64,8 @@ def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarr
         print("ERROR: No labels in database. Run seed_history.py first.")
         sys.exit(1)
 
+    if exclude_sources:
+        print(f"Excluding label sources: {', '.join(exclude_sources)}")
     print(f"Found {len(labels)} labels in database")
 
     X_rows = []

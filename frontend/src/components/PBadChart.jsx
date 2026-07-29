@@ -167,7 +167,7 @@ function CustomTooltip({ active, payload, colors }) {
           style={{ background: fill }}
         />
         <span className="font-semibold">{point.level}</span>
-        <span style={{ color: colors.muted }}>� {fmtPct(point.p_bad)} no-go</span>
+        <span style={{ color: colors.muted }}>· {fmtPct(point.p_bad)} no-go</span>
       </div>
     </div>
   );
@@ -373,7 +373,7 @@ function PBadChart({
                     />
                     Best window {fmtClock(optimalPoint.ts)}
                     {optimalPoint.p_bad != null
-                      ? ` � ${fmtPct(optimalPoint.p_bad)}`
+                      ? ` · ${fmtPct(optimalPoint.p_bad)}`
                       : ''}
                   </>
                 ) : (

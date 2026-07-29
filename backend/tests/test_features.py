@@ -141,3 +141,97 @@ class TestBuildSequence:
 
         assert seq.shape == (12, 14)
         assert seq.dtype == np.float32
+
+
+class TestPerHourWindowClamp:
+    """Regression: _compute_features must clamp every rolling window to
+    (target_ts - window, target_ts] on BOTH sides.
+
+    The batched forecast path (build_features_for_window) passes DataFrames
+    spanning the whole 48h horizon + padding. Before the clamp, future
+    forecast rows leaked into each hour's trailing stats, and the tide
+    frame was used unfiltered — so tide_range_24h_m became the max−min over
+    several days and flipped the rule-based current_risk to High for every
+    hour while the LSTM p_bad stayed low (dashboard "4% but HIGH" bug).
+    """
+
+    TARGET = pd.Timestamp("2026-06-15 12:00:00")
+
+    def _hourly(self, start_offset_h, end_offset_h):
+        """ts values every hour from target+start_offset to target+end_offset."""
+        return [
+            self.TARGET + pd.Timedelta(hours=h)
+            for h in range(start_offset_h, end_offset_h + 1)
+        ]
+
+    def test_future_weather_rows_are_excluded(self):
+        """A wind spike 6h in the future must not enter wind_max_24h_kmh."""
+        from app.lib.features import _compute_features, FEATURE_COLUMNS
+
+        tses = self._hourly(-24, 24)  # past 24h .. future 24h
+        weather_df = pd.DataFrame([{
+            "ts": ts,
+            "precip_mm": 0.0,
+            # Calm in the past, 80 km/h spike only in future rows.
+            "wind_max_kmh": 80.0 if ts > self.TARGET else 20.0,
+            "wind_mean_kmh": 10.0,
+            "wave_max_m": 0.2,
+            "sea_temp_c": 28.0,
+        } for ts in tses])
+        tide_df = pd.DataFrame(columns=["ts", "height_m"])
+
+        feats = _compute_features(weather_df, tide_df, "dauin_muck", self.TARGET)
+        wind_max = feats[FEATURE_COLUMNS.index("wind_max_24h_kmh")]
+        assert wind_max == pytest.approx(20.0)
+
+    def test_tide_range_uses_only_trailing_24h(self):
+        """Tide range must come from the hour's own trailing 24h, not the
+        whole multi-day frame the batched path supplies."""
+        from app.lib.features import _compute_features, FEATURE_COLUMNS
+
+        # Trailing 24h: flat 1.0 m. Days before + after: a 2.0 m swing.
+        rows = []
+        for ts in self._hourly(-72, 48):
+            in_trailing_24h = self.TARGET - pd.Timedelta(hours=24) <= ts <= self.TARGET
+            rows.append({"ts": ts, "height_m": 1.0 if in_trailing_24h else (2.0 if ts.hour % 2 else 0.0)})
+        tide_df = pd.DataFrame(rows)
+        weather_df = pd.DataFrame(columns=[
+            "ts", "precip_mm", "wind_max_kmh", "wind_mean_kmh", "wave_max_m", "sea_temp_c",
+        ])
+
+        feats = _compute_features(weather_df, tide_df, "dauin_muck", self.TARGET)
+        tide_range = feats[FEATURE_COLUMNS.index("tide_range_24h_m")]
+        assert tide_range == pytest.approx(0.0)
+
+    def test_batched_window_matches_single_hour_semantics(self):
+        """Feeding a horizon-wide frame must give the same answer as feeding
+        an exactly-windowed frame (what build_features fetches)."""
+        from app.lib.features import _compute_features, FEATURE_COLUMNS
+
+        def weather_rows(tses):
+            return pd.DataFrame([{
+                "ts": ts,
+                "precip_mm": 1.0,
+                "wind_max_kmh": 30.0 + (ts.hour % 5),
+                "wind_mean_kmh": 15.0,
+                "wave_max_m": 0.3,
+                "sea_temp_c": 28.0,
+            } for ts in tses])
+
+        def tide_rows(tses):
+            return pd.DataFrame(
+                [{"ts": ts, "height_m": 0.5 + 0.01 * (ts.hour % 12)} for ts in tses],
+            )
+
+        horizon_feats = _compute_features(
+            weather_rows(self._hourly(-72, 48)),
+            tide_rows(self._hourly(-72, 48)),
+            "dauin_muck", self.TARGET,
+        )
+        exact_feats = _compute_features(
+            weather_rows(self._hourly(-48, 0)),
+            tide_rows(self._hourly(-24, 0)),
+            "dauin_muck", self.TARGET,
+        )
+        for name, a, b in zip(FEATURE_COLUMNS, horizon_feats, exact_feats):
+            assert a == pytest.approx(b), f"{name}: horizon={a} exact={b}"

@@ -29,20 +29,23 @@ function renderDashboard() {
   );
 }
 
-describe('Dashboard — loading skeleton mirrors the actual container order', () => {
-  it('renders the KPI strip, chart, provenance, forecast grid, optimal window, and footer skeletons in the post-swap order', () => {
+describe('Dashboard ï¿½ loading skeleton mirrors the actual container order', () => {
+  it('renders the KPI strip, chart, forecast grid, optimal window, and footer skeletons in the post-swap order', () => {
     renderDashboard();
 
     const kpi = screen.getByTestId('skeleton-kpi-strip');
     const chart = screen.getByTestId('skeleton-chart');
-    const prov = screen.getByTestId('skeleton-provenance');
     const grid = screen.getByTestId('skeleton-forecast-grid');
     const optimal = screen.getByTestId('skeleton-optimal-window');
     const footer = screen.getByTestId('skeleton-footer');
 
-    [kpi, chart, prov, grid, optimal, footer].forEach((el) => {
+    [kpi, chart, grid, optimal, footer].forEach((el) => {
       expect(el).toBeInTheDocument();
     });
+
+    // The provenance strip is hidden on the Dashboard, so its skeleton
+    // must not render either.
+    expect(screen.queryByTestId('skeleton-provenance')).not.toBeInTheDocument();
 
     // The KPI strip should default to 5 cards (matches the real Dashboard).
     const kpiCards = kpi.querySelectorAll(':scope > div');
@@ -52,12 +55,11 @@ describe('Dashboard — loading skeleton mirrors the actual container order', () =
     const gridCards = grid.querySelectorAll(':scope > div');
     expect(gridCards.length).toBe(12);
 
-    // Document order: kpi < chart < prov < grid < optimal < footer.
+    // Document order: kpi < chart < grid < optimal < footer.
     const position = (el) =>
       Array.from(document.body.querySelectorAll('*')).indexOf(el);
     expect(position(kpi)).toBeLessThan(position(chart));
-    expect(position(chart)).toBeLessThan(position(prov));
-    expect(position(prov)).toBeLessThan(position(grid));
+    expect(position(chart)).toBeLessThan(position(grid));
     expect(position(grid)).toBeLessThan(position(optimal));
     expect(position(optimal)).toBeLessThan(position(footer));
   });
