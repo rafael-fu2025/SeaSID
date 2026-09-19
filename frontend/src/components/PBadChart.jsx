@@ -11,6 +11,9 @@ import {
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Activity, Sparkles } from 'lucide-react';
+import {
+  NO_GO_THRESHOLD, WARN_THRESHOLD, riskLabel,
+} from '@/lib/riskLevels';
 
 /**
  * PBadChart - 12-hour probability-of-no-go visualization.
@@ -37,8 +40,9 @@ import { Activity, Sparkles } from 'lucide-react';
  *  - Two dashed threshold lines exist (markers: pbad-guide-warn/no-go).
  */
 
-const WARN_THRESHOLD = 0.3;
-const NO_GO_THRESHOLD = 0.6;
+// Thresholds come from lib/riskLevels.js (audit F-F2-05) via the import
+// above — WARN_THRESHOLD / NO_GO_THRESHOLD drive the ReferenceLines, legend,
+// and per-dot levels.
 const OPTIMAL_R = 5;
 const NORMAL_R = 3.5;
 
@@ -96,13 +100,6 @@ function useThemeColors() {
 
 // --- helpers ----------------------------------------------------------
 
-function riskLevel(p) {
-  if (p == null) return 'Unknown';
-  if (p >= NO_GO_THRESHOLD) return 'No-Go';
-  if (p >= WARN_THRESHOLD) return 'Caution';
-  return 'Go';
-}
-
 function fmtTime(iso) {
   return new Date(iso).toLocaleString([], {
     weekday: 'short',
@@ -143,8 +140,6 @@ function dotColor(level, colors) {
   }
 }
 
-// --- tooltip / dot shapes ----------------------------------------------
-
 function CustomTooltip({ active, payload, colors }) {
   if (!active || !payload?.length) return null;
   const point = payload[0]?.payload;
@@ -166,12 +161,25 @@ function CustomTooltip({ active, payload, colors }) {
           className="inline-block size-2 rounded-sm"
           style={{ background: fill }}
         />
-        <span className="font-semibold">{point.level}</span>
-        <span style={{ color: colors.muted }}>� {fmtPct(point.p_bad)} no-go</span>
+        {point.isDegraded ? (
+          <span className="font-semibold text-muted-foreground">
+            no trustworthy value (degraded: {point.degradedReason || 'rule fallback'})
+          </span>
+        ) : (
+          <>
+            <span className="font-semibold">{point.level}</span>
+            <span style={{ color: colors.muted }}>· {fmtPct(point.p_bad)} no-go</span>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
+// ── Degraded-hour rendering (audit F-F2-02) ───────────────────────────────
+// A degraded or missing p_bad plots as a GAP (null), never as 0% "Go".
+// The dot callback renders degraded hours as hollow muted rings so the
+// operator sees "no trustworthy value here" at a glance.
 
 function HourDot(props) {
   const { cx, cy, payload } = props;
@@ -198,6 +206,19 @@ function HourDot(props) {
           strokeWidth={1}
         />
       </g>
+    );
+  }
+  if (payload?.isDegraded) {
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={NORMAL_R}
+        fill={colors.card}
+        stroke={colors.muted}
+        strokeDasharray="2 1.5"
+        strokeWidth={1.5}
+      />
     );
   }
   return (
@@ -238,11 +259,15 @@ function PBadChart({
     const data = hours.map((h, i) => ({
       i,
       ts: h.ts,
-      p_bad: h.p_bad ?? 0,
-      level: riskLevel(h.p_bad ?? 0),
+      // Audit F-F2-02: degraded or missing hours plot as GAPS — the old
+      // `h.p_bad ?? 0` rendered "no data" as a safe 0% Go dot.
+      p_bad: h.degraded || h.p_bad == null ? null : h.p_bad,
+      level: riskLabel(h.degraded ? null : (h.p_bad ?? null)),
       label: fmtTime(h.ts),
       fullLabel: fmtFull(h.ts),
       isOptimal: i === optimalIndex,
+      isDegraded: Boolean(h.degraded || h.p_bad == null),
+      degradedReason: h.degraded_reason || (h.degraded ? 'rule fallback' : null),
     }));
     return { data, optimalIndex, labelStep, isEmpty: false };
   }, [hours, optimalIso]);
@@ -326,6 +351,7 @@ function PBadChart({
                     dataKey="p_bad"
                     stroke={colors.reef}
                     strokeWidth={2}
+                    connectNulls={false}
                     dot={(p) => <HourDot {...p} colors={colors} />}
                     activeDot={{
                       r: 6,
@@ -373,7 +399,7 @@ function PBadChart({
                     />
                     Best window {fmtClock(optimalPoint.ts)}
                     {optimalPoint.p_bad != null
-                      ? ` � ${fmtPct(optimalPoint.p_bad)}`
+                      ? ` · ${fmtPct(optimalPoint.p_bad)}`
                       : ''}
                   </>
                 ) : (

@@ -74,6 +74,18 @@ Available sites:
 
 MAX_TOOL_ROUNDS = 5
 
+# Audit F-B5-03: unbounded prompt budgets let 4 × 200k-char documents blow
+# past any model context. Caps are enforced server-side.
+DOC_BUDGET_CHARS = int(os.getenv("AGENT_DOC_BUDGET_CHARS", "60000"))
+HISTORY_BUDGET_CHARS = int(os.getenv("AGENT_HISTORY_BUDGET_CHARS", "30000"))
+TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", "8000"))
+
+
+def _truncate(text: str, limit: int, label: str = "content") -> str:
+    if text is None or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n[... {label} truncated at {limit} characters ...]"
+
 # Default timezone for the agent's "now" hint. Dauin/Apo live in
 # Asia/Manila (UTC+8, no DST). Override via AGENT_TIMEZONE if you run
 # SeaSID somewhere else. The value is read inside ``_now_reminder()``
@@ -159,7 +171,9 @@ def _compose_user_message(
     """Build the current-turn user content for the LLM plus a text-only
     representation for history.
 
-    - Text-like documents are inlined into the prompt as plain text.
+    - Text-like documents are inlined into the prompt as plain text, capped
+      at ``DOC_BUDGET_CHARS`` total (largest first; each truncated body is
+      marked so the model knows the document was cut).
     - Images are attached as OpenAI-style ``image_url`` content parts
       (data URLs) so a multimodal model can read them. History keeps a
       short ``[Attached image(s): ...]`` placeholder instead of the raw
@@ -172,11 +186,22 @@ def _compose_user_message(
     images = images or []
     documents = documents or []
 
+    inline_parts: list[str] = []
+    budget = DOC_BUDGET_CHARS
     for doc in documents[:4]:
         name = (doc.get("name") or "document").strip()
         body = (doc.get("text") or "").strip()
-        if body:
-            text += f"\n\n[Attached document: {name}]\n{body}"
+        if not body:
+            continue
+        block = f"[Attached document: {name}]\n{body}"
+        if len(block) > budget:
+            block = _truncate(block, budget, f"document '{name}'")
+        inline_parts.append(block)
+        budget -= len(block)
+        if budget <= 0:
+            break
+    if inline_parts:
+        text += "\n\n" + "\n\n".join(inline_parts)
 
     history_text = text
     model_content: str | list[dict] = text
@@ -203,6 +228,7 @@ async def chat(
     owner_id: str | None = None,
     images: list[dict] | None = None,
     documents: list[dict] | None = None,
+    disabled_tools: list[str] | None = None,
 ) -> dict:
     """
     Process a user message through the agent.
@@ -269,7 +295,10 @@ async def chat(
     # Done once per turn so all rounds in the same conversation see the
     # same set; if the MCP goes away mid-turn, the handlers fall back to
     # a friendly "unavailable" message without aborting the loop.
-    tool_definitions, tool_handlers = await get_active_tool_definitions()
+    # `disabled_tools` removes operator-switched-off tools entirely.
+    tool_definitions, tool_handlers = await get_active_tool_definitions(
+        disabled=set(disabled_tools or ()),
+    )
 
     tool_calls_log = []
 
@@ -332,6 +361,7 @@ async def chat(
             else:
                 result = json.dumps({"error": f"Unknown tool: {func_name}"})
 
+            result = _truncate(result, TOOL_RESULT_MAX_CHARS, "tool result")
             tool_calls_log.append({
                 "name": func_name,
                 "arguments": func_args,
@@ -381,7 +411,11 @@ def _load_history(
     max_messages: int = 20,
     owner_id: str | None = None,
 ) -> list[dict]:
-    """Load recent conversation history from the database."""
+    """Load recent conversation history from the database.
+
+    Capped at ``HISTORY_BUDGET_CHARS`` total (newest messages win) so a long
+    conversation cannot silently overflow the model context (audit F-B5-03).
+    """
     try:
         from app.lib import db
 
@@ -395,8 +429,13 @@ def _load_history(
             rows = query.order_by(db.AgentConversation.ts.desc()).limit(max_messages).all()
 
             messages = []
+            budget = HISTORY_BUDGET_CHARS
             for row in reversed(rows):
-                messages.append({"role": row.role, "content": row.content})
+                content = row.content or ""
+                messages.append({"role": row.role, "content": content})
+                budget -= len(content)
+                if budget <= 0:
+                    break
 
             return messages
         finally:
@@ -444,6 +483,7 @@ async def chat_stream(
     owner_id: str | None = None,
     images: list[dict] | None = None,
     documents: list[dict] | None = None,
+    disabled_tools: list[str] | None = None,
 ):
     """
     Streaming variant of `chat()` — yields dict events that the FastAPI
@@ -507,7 +547,9 @@ async def chat_stream(
     # Pull the merged tool list (built-ins + MiniMax MCP web tools) once
     # per turn. The MCP may add/remove tools across restarts; if it can't
     # boot, the model just doesn't see the web_search / web_browse entries.
-    tool_definitions, tool_handlers = await get_active_tool_definitions()
+    tool_definitions, tool_handlers = await get_active_tool_definitions(
+        disabled=set(disabled_tools or ()),
+    )
 
     for _round in range(MAX_TOOL_ROUNDS):
         try:
@@ -653,6 +695,7 @@ async def chat_stream(
                     result = json.dumps({"error": str(exc)})
             else:
                 result = json.dumps({"error": f"Unknown tool: {tc['name']}"})
+            result = _truncate(result, TOOL_RESULT_MAX_CHARS, "tool result")
             duration_ms = int((time.monotonic() - t0) * 1000)
 
             yield {

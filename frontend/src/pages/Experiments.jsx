@@ -153,6 +153,17 @@ export default function Experiments() {
           console.debug('experiments-complete dispatch failed', eventErr);
         }
       },
+      onCancelled: () => {
+        // Audit F-F6-01: the run was actually stopped server-side — no
+        // model reload, no cache invalidation happened.
+        setRunStage('idle');
+        setRunning(false);
+        setRunLogs((prev) => [...prev, 'Run cancelled — training stopped server-side.']);
+        if (closeStreamRef.current) {
+          closeStreamRef.current();
+          closeStreamRef.current = null;
+        }
+      },
       onError: (message) => {
         setError(message);
         setRunStage('error');
@@ -166,11 +177,17 @@ export default function Experiments() {
     closeStreamRef.current = close;
   };
 
+  // Audit F-F6-01: cancel stops the TRAINING server-side via
+  // /experiments/run/cancel, then detaches the stream. The old handler
+  // only closed the client stream while the suite ran to completion.
   const cancel = () => {
     if (closeStreamRef.current) {
       closeStreamRef.current();
       closeStreamRef.current = null;
     }
+    api.cancelExperiments().catch(() => {
+      /* even if the ping fails, detach the stream */
+    });
     setRunning(false);
     setRunStage('idle');
   };

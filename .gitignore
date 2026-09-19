@@ -81,3 +81,10 @@ Thumbs.db
 # ── Roadmap / planning docs (kept local, not tracked) ──────────────────────
 nextMove.md
 nextMove_assessment.md
+
+# ── Local tool state + DB backups (2026-09 audit remediation) ──────────────
+backups/
+.mimosa/
+.zcode/
+inspect_colab_mcp.py
+frontend/.tmp_*.png

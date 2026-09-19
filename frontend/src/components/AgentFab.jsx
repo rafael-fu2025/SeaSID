@@ -10,6 +10,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useTheme } from '@/theme/ThemeContext';
 import { cn } from '@/lib/utils';
 import { api, streamChat } from '@/api';
+import { getInitialSiteKey } from '@/lib/sitePrefs';
 import MarkdownResponse from './MarkdownResponse';
 import { Message } from './agent/Message';
 import { StreamingDots } from './agent/StreamingDots';
@@ -31,6 +32,25 @@ function newMessageId() {
 // Text-like documents are read as plain text and inlined into the prompt
 // server-side; binary formats (pdf/doc) are intentionally out of scope.
 const TEXT_DOC_RE = /\.(txt|csv|md|markdown|json|log|tsv|ya?ml)$/i;
+
+// Audit F-F4-01: the Settings tool toggles (seasid.toolsEnabled) are now
+// sent with every message so disabled tools are genuinely withheld from
+// the model server-side.
+const TOOLS_ENABLED_STORAGE_KEY = 'seasid.toolsEnabled';
+
+function readDisabledTools() {
+  try {
+    const raw = window.localStorage.getItem(TOOLS_ENABLED_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Object.entries(parsed || {})
+      .filter(([, enabled]) => enabled === false)
+      .map(([name]) => name);
+  } catch {
+    return [];
+  }
+}
+
 function isTextLikeAttachment(mime, name) {
   if (mime?.startsWith('text/')) return true;
   if (mime === 'application/json') return true;
@@ -66,7 +86,7 @@ function readFileAsText(file) {
  *    so a fat-finger click cannot wipe an in-progress conversation.
  */
 
-function AgentFab({ initialSiteKey = 'dauin_muck' }) {
+function AgentFab({ initialSiteKey = getInitialSiteKey() }) {
   const [open, setOpen] = useState(false);
   const [siteKey, setSiteKey] = useState(initialSiteKey);
   const [messages, setMessages] = useState([]);
@@ -139,10 +159,14 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
     return () => window.cancelAnimationFrame(id);
   }, [open]);
 
-  // Auto-scroll transcript on new content
+  // Auto-scroll transcript on new content — but only when the operator is
+  // already near the bottom (audit F-F5-07): force-scrolling on every token
+  // yanked readers back down mid-stream.
   useEffect(() => {
     const node = scrollRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
+    if (!node) return;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (distance < 64) node.scrollTop = node.scrollHeight;
   }, [messages, busy]);
 
   /**
@@ -216,6 +240,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
         siteKey,
         images,
         documents,
+        disabledTools: readDisabledTools(),
         signal: controller.signal,
       })) {
         switch (ev.type) {
@@ -254,13 +279,24 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
             }));
             break;
 
-          case 'tool_result':
+          case 'tool_result': {
+            // Audit F-F5-01: the backend returns JSON strings like
+            // {"error": …} — the old startsWith('"error"') check never
+            // matched, so failed tool calls rendered as "complete".
+            let hadError = false;
+            try {
+              const parsed = JSON.parse(ev.output);
+              hadError = Boolean(parsed && (parsed.error || parsed.isError));
+            } catch {
+              hadError = typeof ev.output === 'string'
+                && /^Error\b/i.test(ev.output);
+            }
             patchAssistant((prev) => ({
               toolCalls: (prev.toolCalls ?? []).map((tc) =>
                 tc.id === ev.id
                   ? {
                       ...tc,
-                      status: ev.output?.startsWith?.('"error"') ? 'error' : 'complete',
+                      status: hadError ? 'error' : 'complete',
                       output: ev.output,
                       durationMs: ev.durationMs,
                     }
@@ -268,6 +304,7 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
               ),
             }));
             break;
+          }
 
           case 'usage':
             patchAssistant({
@@ -296,10 +333,13 @@ function AgentFab({ initialSiteKey = 'dauin_muck' }) {
           }
 
           case 'error':
-            patchAssistant({
+            // Audit F-F5-03: append to the streamed content via the
+            // functional patch — the old code read `assistantMsg.content`
+            // from the closure (always ''), discarding streamed text.
+            patchAssistant((prev) => ({
               status: 'error',
-              content: (assistantMsg.content || '') + (ev.message ? '\n\n' + ev.message : ''),
-            });
+              content: (prev.content || '') + (ev.message ? '\n\n' + ev.message : ''),
+            }));
             break;
         }
       }

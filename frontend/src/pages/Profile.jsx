@@ -171,7 +171,7 @@ export default function Profile() {
                 disabled={busy}
                 data-testid="profile-signout"
               >
-                Sign out everywhere
+                Sign out of this browser
               </Button>
             </div>
           </form>
@@ -180,9 +180,9 @@ export default function Profile() {
       <ConfirmDialog
         open={signOutDialogOpen}
         onOpenChange={setSignOutDialogOpen}
-        title="Sign out everywhere?"
-        description="End this session on every device currently signed in with this account."
-        confirmLabel="Sign out everywhere"
+        title="Sign out of this browser?"
+        description="Clears your session on this device. Other signed-in devices keep their sessions until their token expires."
+        confirmLabel="Sign out"
         cancelLabel="Cancel"
         tone="danger"
         onConfirm={confirmSignOut}

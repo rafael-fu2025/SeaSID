@@ -53,7 +53,9 @@ beforeEach(() => {
 });
 
 describe('App routing', () => {
-  it('renders the cockpit shell (brand, nav, FAB, status bar, UserMenu) on /', async () => {
+  // Audit F-F1-03: pages are lazy-loaded now, so the first render of each
+  // route pays a chunk load — give these tests a generous timeout.
+  it('renders the cockpit shell (brand, nav, FAB, status bar, UserMenu) on /', { timeout: 20_000 }, async () => {
     window.history.pushState({}, '', '/');
     renderApp();
     expect(screen.getByLabelText(/SeaSID/i)).toBeInTheDocument();
@@ -65,7 +67,7 @@ describe('App routing', () => {
     expect(screen.getByTestId('user-menu-trigger')).toBeInTheDocument();
   });
 
-  it('renders the Profile page at /profile', async () => {
+  it('renders the Profile page at /profile', { timeout: 20_000 }, async () => {
     try { localStorage.setItem('seasid.authToken', 'test-token'); } catch {}
     const { api } = await import('@/api');
     api.me = vi.fn().mockResolvedValue({
@@ -77,7 +79,7 @@ describe('App routing', () => {
     expect(screen.getByTestId('profile-identity')).toBeInTheDocument();
   });
 
-  it('renders role-aware Settings tabs without the right inspector rail', async () => {
+  it('renders role-aware Settings tabs without the right inspector rail', { timeout: 20_000 }, async () => {
     const user = userEvent.setup();
     try { localStorage.setItem('seasid.authToken', 'test-token'); } catch {}
     const { api } = await import('@/api');

@@ -35,6 +35,15 @@ from app.lib.sites import is_muck_site
 
 logger = logging.getLogger(__name__)
 
+# Audit F-B1-02: maximum age for the air-quality snapshot used in features.
+# Mirrors freshness.AIR_STALE_HOURS — kept local to avoid an import cycle.
+AIR_SNAPSHOT_MAX_AGE_HOURS = 12
+
+# Audit F-B1-02: below this fraction of expected 24h-weather rows the hour is
+# flagged degraded (features computed on a partially-empty window understate
+# precip/wind/wave, which biases toward "calm").
+MIN_WINDOW_COVERAGE = 0.75
+
 FEATURE_COLUMNS = [
     "precip_24h_mm",         # sum, 24h (mm)
     "precip_48h_mm",         # sum, 48h (mm)
@@ -66,7 +75,9 @@ def build_features(site_key: str, target_ts: datetime) -> pd.DataFrame:
     weather_48h = _fetch_weather_window(site_key, target_ts, hours=48)
     tide_24h = _fetch_tide_window(site_key, target_ts, hours=24)
     marine_24h = _fetch_marine_window(site_key, target_ts, hours=24)
-    air_snapshot = _fetch_air_snapshot(site_key, target_ts)
+    air_snapshot = _fetch_air_snapshot(
+        site_key, target_ts, max_age_hours=AIR_SNAPSHOT_MAX_AGE_HOURS,
+    )
 
     # Compute features
     features = _compute_features(
@@ -82,14 +93,18 @@ def build_features(site_key: str, target_ts: datetime) -> pd.DataFrame:
 def build_features_for_window(
     site_key: str,
     target_tses: list[datetime],
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, list[float]]:
     """
     Vectorized feature builder — fetches the union of all rolling windows once,
     then computes features for every target_ts. Avoids the N+1 query pattern of
     calling build_features() in a loop.
+
+    Returns ``(features_df, coverage)`` where ``coverage[i]`` is the fraction
+    of expected 24h-weather rows actually present for ``target_tses[i]``
+    (audit F-B1-02: low coverage means the features understate conditions).
     """
     if not target_tses:
-        return pd.DataFrame(columns=FEATURE_COLUMNS)
+        return pd.DataFrame(columns=FEATURE_COLUMNS), []
 
     # Normalize timezones
     norm = []
@@ -107,9 +122,12 @@ def build_features_for_window(
     tide_df = _fetch_tide_window(site_key, end, hours=int((end - start_tide).total_seconds() // 3600))
     marine_df = _fetch_marine_window(site_key, end, hours=int((end - start_tide).total_seconds() // 3600))
     # Air quality is a single snapshot — fetch once and reuse.
-    air_snapshot = _fetch_air_snapshot(site_key, end)
+    air_snapshot = _fetch_air_snapshot(
+        site_key, end, max_age_hours=AIR_SNAPSHOT_MAX_AGE_HOURS,
+    )
 
     rows = []
+    coverage: list[float] = []
     for ts in norm:
         try:
             f = _compute_features(
@@ -120,8 +138,18 @@ def build_features_for_window(
         except Exception:
             f = [0.0] * len(FEATURE_COLUMNS)
         rows.append(f)
+        # Coverage = fraction of the trailing 24h weather window that actually
+        # has rows (audit F-B1-02). Gaps come from ingest outages — or, before
+        # the F-B6-01 fix, from forecast data simply never having been stored.
+        # Compare in naive-UTC space (weather_df.ts is normalized naive).
+        ts_naive = _to_naive_utc(ts)
+        window = weather_df[
+            (weather_df["ts"] >= ts_naive - pd.Timedelta(hours=24))
+            & (weather_df["ts"] <= ts_naive)
+        ]
+        coverage.append(min(1.0, len(window) / 24.0) if len(weather_df) > 0 else 0.0)
 
-    return pd.DataFrame(rows, columns=FEATURE_COLUMNS)
+    return pd.DataFrame(rows, columns=FEATURE_COLUMNS), coverage
 
 
 def build_sequence(
@@ -262,30 +290,13 @@ def build_features_from_arrays(
 
 # ── Internal helpers ───────────────────────────────────────────────────────
 
-def _to_naive_utc(ts) -> "pd.Timestamp":
-    """Convert any datetime-like to a tz-naive pandas Timestamp in UTC.
-
-    Pandas 3.x enforces strict dtype equality for `>=`/`<=`. The DB returns
-    tz-aware datetimes; pandas coerces to datetime64[us, UTC]; cutoff values
-    are tz-aware datetime objects. Normalizing both sides to tz-naive UTC
-    gives consistent comparisons.
-    """
-    out = pd.Timestamp(ts)
-    if out.tzinfo is not None:
-        out = out.tz_convert("UTC").tz_localize(None)
-    return out
-
-
-def _normalize_ts_column(series: pd.Series) -> pd.Series:
-    """Return a tz-naive UTC datetime64 Series (no-op if already naive)."""
-    if series.empty:
-        return series
-    if pd.api.types.is_datetime64_any_dtype(series):
-        if getattr(series.dt, "tz", None) is not None:
-            return series.dt.tz_convert("UTC").dt.tz_localize(None)
-        return series
-    converted = pd.to_datetime(series, utc=True, errors="coerce")
-    return converted.dt.tz_convert("UTC").dt.tz_localize(None)
+# Audit F-B1-23: the tz-normalization helpers live in app.lib.timeutil —
+# re-exported (at import time, below) so existing
+# `from app.lib.features import _to_naive_utc` imports keep working.
+from app.lib.timeutil import (  # noqa: E402  — placed with helpers by design
+    normalize_ts_column as _normalize_ts_column,
+    to_naive_utc as _to_naive_utc,
+)
 
 
 
@@ -397,17 +408,29 @@ def _fetch_marine_window(
         session.close()
 
 
-def _fetch_air_snapshot(site_key: str, target_ts: datetime) -> dict | None:
-    """Fetch the most recent air-quality snapshot at-or-before target_ts."""
+def _fetch_air_snapshot(
+    site_key: str,
+    target_ts: datetime,
+    max_age_hours: float | None = None,
+) -> dict | None:
+    """Fetch the most recent air-quality snapshot at-or-before target_ts.
+
+    ``max_age_hours`` bounds staleness (audit F-B1-07): an arbitrarily old
+    snapshot is silently misleading, so feature building passes
+    ``AIR_SNAPSHOT_MAX_AGE_HOURS``. Older snapshots return None and callers
+    fall back to the climatological background values.
+    """
     session = db.SessionLocal()
     try:
-        row = (
+        query = (
             session.query(db.AirQualityObs)
             .filter(db.AirQualityObs.site_key == site_key)
             .filter(db.AirQualityObs.ts <= target_ts)
-            .order_by(db.AirQualityObs.ts.desc())
-            .first()
         )
+        if max_age_hours is not None:
+            cutoff = _to_naive_utc(target_ts) - pd.Timedelta(hours=max_age_hours)
+            query = query.filter(db.AirQualityObs.ts >= cutoff)
+        row = query.order_by(db.AirQualityObs.ts.desc()).first()
         if row is None:
             return None
         return {

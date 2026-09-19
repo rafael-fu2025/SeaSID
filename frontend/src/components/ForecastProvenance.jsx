@@ -30,15 +30,15 @@ export function ForecastProvenance({
   const fmtTime = (iso) => {
     if (!iso) return '—';
     const d = new Date(iso);
-    return (
-      d.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }) + ' UTC'
-    );
+    // Rendered in the viewer's timezone — the previous " UTC" suffix was a
+    // false label (audit F-F2-01).
+    return d.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
   };
 
   const providerEntries = Object.entries(providers || {});

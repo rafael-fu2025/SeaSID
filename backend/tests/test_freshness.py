@@ -48,39 +48,39 @@ class TestClassifyThresholds:
         return self.now - timedelta(hours=age_hours)
 
     def test_weather_live_within_three_hours(self):
-        out = fr._classify(self._src(1), self.now, 3, 24, "open_meteo")
+        out = fr._classify("weather", self._src(1), self.now, 3, 24, "open_meteo")
         assert out.status == "live"
         assert out.age_hours == 1.0
         assert out.provider == "open_meteo"
 
     def test_weather_stale_between_three_and_twenty_four_hours(self):
-        out = fr._classify(self._src(10), self.now, 3, 24, "open_meteo")
+        out = fr._classify("weather", self._src(10), self.now, 3, 24, "open_meteo")
         assert out.status == "stale"
 
     def test_weather_unavailable_beyond_twenty_four_hours(self):
-        out = fr._classify(self._src(30), self.now, 3, 24, "open_meteo")
+        out = fr._classify("weather", self._src(30), self.now, 3, 24, "open_meteo")
         assert out.status == "unavailable"
 
     def test_no_observation_is_unavailable(self):
-        out = fr._classify(None, self.now, 3, 24, "open_meteo")
+        out = fr._classify("weather", None, self.now, 3, 24, "open_meteo")
         assert out.status == "unavailable"
         assert out.last_observed_at is None
         assert out.age_hours is None
 
     def test_air_uses_tighter_thresholds(self):
         # 3h-old air = stale (live is <= 2h)
-        out = fr._classify(self._src(3), self.now, 2, 12, "aqicn")
+        out = fr._classify("air", self._src(3), self.now, 2, 12, "aqicn")
         assert out.status == "stale"
 
     def test_tides_have_wider_live_window(self):
         # 5h-old tide = live (live is <= 6h)
-        out = fr._classify(self._src(5), self.now, 6, 24, "open_meteo")
+        out = fr._classify("tide", self._src(5), self.now, 6, 24, "open_meteo")
         assert out.status == "live"
 
     def test_naive_datetime_from_db_is_normalised_to_utc(self):
         # SQLite drops tzinfo on read — _classify must still compare correctly.
         naive = (self.now - timedelta(hours=1)).replace(tzinfo=None)
-        out = fr._classify(naive, self.now, 3, 24, "open_meteo")
+        out = fr._classify("weather", naive, self.now, 3, 24, "open_meteo")
         assert out.status == "live"
 
 

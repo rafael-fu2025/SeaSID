@@ -11,11 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 from app.lib import db
 from app.lib.features import (
+    MIN_WINDOW_COVERAGE,
     build_features, build_features_for_window, build_sequences_for_window,
 )
 from app.lib.freshness import compute_freshness, model_version
 from app.lib.providers import active_providers
 from app.lib.scoring import (
+    p_bad_from_rules,
     score_hour,
     risk_label,
     features_dict_from_row,
@@ -137,11 +139,17 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
     target_tses = [now + timedelta(hours=h) for h in range(horizon)]
 
     # Batched feature fetch — one DB roundtrip per table instead of 96.
+    # Returns (features_df, coverage) where coverage[i] is the fraction of the
+    # trailing 24h weather window that actually had rows for hour i (audit
+    # F-B1-02): low coverage means the features understate conditions.
+    feat_df = None
+    coverage: list[float] | None = None
     try:
-        feat_df = build_features_for_window(site_key, target_tses)
+        feat_df, coverage = build_features_for_window(site_key, target_tses)
     except Exception as exc:
         logger.warning("Batched feature fetch failed (%s) — falling back per-hour", exc)
         feat_df = None
+        coverage = None
 
     # Batched LSTM sequence fetch — 4 DB queries total instead of
     # 4 × 24 × 48 ≈ 4,600. Skipped when bundle is rule-based (no model).
@@ -188,8 +196,11 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
         # matches what the agent reports instead of returning a meaningless
         # 0.5 (Phase 0.5 finding: the LSTM StandardScaler was trained on 11
         # features but build_features returns 14, so predict() crashes).
+        # Audit F-B3-02: p_bad starts as None (no number at all) instead of
+        # a fabricated neutral 0.5. Any number emitted below is either a
+        # real ML score or an explicitly-labeled rule score.
         viz = current = rl = None
-        p_bad: float = 0.5
+        p_bad: float | None = None
         degraded_reason: str | None = None
         source: str = model_type_str
         try:
@@ -208,38 +219,63 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
             viz = current = rl = "Unknown"
             degraded_reason = f"feature_build_failed: {type(exc).__name__}"
 
-        # Prefer the batched prediction when available; fall back to
-        # per-hour predict() when batch failed or returned None for this hour.
-        try:
-            if viz != "Unknown" and batched_p_bads[h] is not None:
-                p_bad = batched_p_bads[h]
-            elif viz != "Unknown":
-                p_bad = predict(bundle, site_key, target_ts)
-        except Exception as exc:
-            # Keep the configured LSTM as the prediction source. The neutral
-            # value is explicitly marked degraded instead of switching models.
-            fallback_hours += 1
-            degraded_reason = f"lstm_predict_failed: {type(exc).__name__}"
-            logger.warning("LSTM prediction failed for %s: %s", target_ts, exc)
+        # Audit F-B1-02: a partially-empty feature window understates
+        # precip/wind/wave — flag the hour so the UI and optimal-window
+        # selection treat it as untrustworthy rather than "calm".
+        if degraded_reason is None and coverage is not None and h < len(coverage):
+            if coverage[h] < MIN_WINDOW_COVERAGE:
+                degraded_reason = f"low_data_coverage:{coverage[h]:.0%}"
+
+        if viz == "Unknown":
+            p_bad = None  # no trustworthy number for this hour
         else:
-            # If the batch predict for the whole window failed and we
-            # still got an individual ML number here, treat it as a fallback.
-            if batched_failure is not None and viz != "Unknown":
-                fallback_hours += 1
-                degraded_reason = f"lstm_batch_failed: {batched_failure}"
+            # Prefer the batched ML prediction; per-hour predict() as the
+            # per-hour fallback; the rule scorer when no bundle qualified
+            # (Tier 3) or when the ML prediction crashed — always labeled.
+            if batched_p_bads[h] is not None:
+                p_bad = batched_p_bads[h]
+            elif bundle is not None:
+                try:
+                    p_bad = predict(bundle, site_key, target_ts)
+                    if batched_failure is not None:
+                        fallback_hours += 1
+                        degraded_reason = f"lstm_batch_failed: {batched_failure}"
+                except Exception as exc:
+                    p_bad = p_bad_from_rules(feat_dict)
+                    source = "rule_based"
+                    fallback_hours += 1
+                    degraded_reason = f"lstm_predict_failed: {type(exc).__name__}"
+                    logger.warning(
+                        "LSTM prediction failed for %s: %s — served rule score",
+                        target_ts, exc,
+                    )
+            else:
+                # Tier 3: rule-based serving (audit F-B2-01).
+                p_bad = p_bad_from_rules(feat_dict)
 
         forecast_hours.append({
             "ts": target_ts.isoformat(),
             "risk": rl,
-            "p_bad": round(p_bad, 3),
+            "p_bad": round(p_bad, 3) if p_bad is not None else None,
             "viz_label": viz,
             "current_risk": current,
             "model_used": source,
             "degraded_reason": degraded_reason,
+            # Audit F-B3-02: explicit per-hour degradation flag so the UI
+            # can distinguish measured values from flagged ones.
+            "degraded": degraded_reason is not None,
         })
 
-    # Highlight the optimal window: the hour with the lowest p_bad.
-    optimal = min(forecast_hours, key=lambda x: x["p_bad"])
+    # Highlight the optimal window: the hour with the lowest p_bad among
+    # hours that are neither degraded nor missing a value (audit F-B3-02 —
+    # a fabricated/degraded value must never win "best time to dive").
+    eligible = [
+        x for x in forecast_hours
+        if x["p_bad"] is not None and not x["degraded"]
+    ]
+    pool = eligible or [x for x in forecast_hours if x["p_bad"] is not None]
+    optimal_degraded = not eligible
+    optimal = min(pool, key=lambda x: x["p_bad"]) if pool else None
 
     # Optional air-quality block — present only when AQICN has populated
     # the air_quality_obs table for this site. Optional so deployments
@@ -310,6 +346,9 @@ def get_forecast(site_key: str, hours: int = 48) -> dict:
         # ML model crashed per-hour and we substituted rules.
         "forecast_source": forecast_source,
         "fallback_hours": fallback_hours,
+        # Audit F-B3-02: true when every trustworthy hour was degraded and
+        # the optimal window had to be picked from flagged hours.
+        "optimal_degraded": optimal_degraded,
     }
     if air is not None:
         out["air"] = air
@@ -327,7 +366,13 @@ def submit_verification(
     actor_id: str | None = None,
     actor_username: str | None = None,
 ) -> dict:
-    """Process an operator verification submission."""
+    """Process an operator verification submission.
+
+    Audit F-B3-05: resubmitting the same (site, date, operator) previously
+    crashed with a 500. The submission is now an upsert — the operator's
+    latest answer for a date wins, with ``updated`` (not ``saved``) in the
+    message so the UI can tell the difference.
+    """
     site = get_site(data["site_key"])
     if site is None:
         raise ValueError(f"Unknown site: {data['site_key']}")
@@ -342,6 +387,12 @@ def submit_verification(
         from datetime import date as _date
         label_date = _date.fromisoformat(label_date)
 
+    # Audit F-B3-15: ground-truth labels describe observations — a future
+    # date is a data-entry error, not a valid label.
+    from datetime import date as _date
+    if label_date > _date.today():
+        raise ValueError("Verification date cannot be in the future")
+
     session = db.SessionLocal()
     try:
         # Phase 5: structured reason + operator confidence. Default
@@ -355,36 +406,80 @@ def submit_verification(
         confidence = data.get("confidence") or "med"
         operator = actor_username or data.get("operator")
 
-        # Save to operator_verifications
-        verification = db.OperatorVerification(
-            site_key=data["site_key"],
-            operator=operator,
-            actor_id=actor_id,
-            date=label_date,
-            verdict=data["verdict"],
-            actual_viz_m=data.get("actual_viz_m"),
-            actual_current=data.get("actual_current"),
-            comments=data.get("comments"),
-            no_go_reason=no_go_reason,
-            confidence=confidence,
+        comments = data.get("comments")
+        if comments and len(comments) > 2000:
+            comments = comments[:2000]
+
+        existing = (
+            session.query(db.OperatorVerification)
+            .filter(
+                db.OperatorVerification.site_key == data["site_key"],
+                db.OperatorVerification.date == label_date,
+                db.OperatorVerification.operator == operator,
+            )
+            .one_or_none()
         )
-        session.add(verification)
+
+        shop_name = (data.get("shop_name") or "").strip() or None
+
+        if existing is not None:
+            # Update path — the operator's latest answer for this date wins.
+            existing.verdict = data["verdict"]
+            existing.actual_viz_m = data.get("actual_viz_m")
+            existing.actual_current = data.get("actual_current")
+            existing.comments = comments
+            existing.no_go_reason = no_go_reason
+            existing.confidence = confidence
+            existing.shop_name = shop_name
+            verification = existing
+            message = "Verification updated — your latest answer for this date was saved."
+        else:
+            verification = db.OperatorVerification(
+                site_key=data["site_key"],
+                operator=operator,
+                actor_id=actor_id,
+                date=label_date,
+                verdict=data["verdict"],
+                actual_viz_m=data.get("actual_viz_m"),
+                actual_current=data.get("actual_current"),
+                comments=comments,
+                no_go_reason=no_go_reason,
+                confidence=confidence,
+                shop_name=shop_name,
+            )
+            session.add(verification)
+            message = "Verification saved. Thank you!"
 
         # Also add to no_dive_labels for training. Same reason + confidence
         # are propagated so the trainer can weight high-confidence rows.
-        label = db.NoDiveLabel(
-            site_key=data["site_key"],
-            date=label_date,
+        existing_label = (
+            session.query(db.NoDiveLabel)
+            .filter(
+                db.NoDiveLabel.site_key == data["site_key"],
+                db.NoDiveLabel.date == label_date,
+                db.NoDiveLabel.source == f"operator_{operator or 'anon'}",
+            )
+            .one_or_none()
+        )
+        label_payload = dict(
             label=data["verdict"],
-            source=f"operator_{operator or 'anon'}",
             actor_id=actor_id,
             actual_viz_m=data.get("actual_viz_m"),
             actual_current=data.get("actual_current"),
-            comments=data.get("comments"),
+            comments=comments,
             no_go_reason=no_go_reason,
             confidence=confidence,
         )
-        session.add(label)
+        if existing_label is not None:
+            for key, value in label_payload.items():
+                setattr(existing_label, key, value)
+        else:
+            session.add(db.NoDiveLabel(
+                site_key=data["site_key"],
+                date=label_date,
+                source=f"operator_{operator or 'anon'}",
+                **label_payload,
+            ))
         session.commit()
 
         return {
@@ -392,7 +487,7 @@ def submit_verification(
             "site_key": data["site_key"],
             "date": str(label_date),
             "verdict": data["verdict"],
-            "message": "Verification saved. Thank you!",
+            "message": message,
             "no_go_reason": no_go_reason,
             "confidence": confidence,
         }
@@ -426,6 +521,7 @@ def get_labels(site_key: str, limit: int = 50) -> dict:
                     "date": lbl.date.isoformat(),
                     "label": lbl.label,
                     "source": lbl.source,
+                    "site_key": lbl.site_key,
                     "actual_viz_m": lbl.actual_viz_m,
                     "actual_current": lbl.actual_current,
                     "comments": lbl.comments,

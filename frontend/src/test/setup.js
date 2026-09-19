@@ -1,5 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 
+// Audit F-F1-03: pages are lazy-loaded (React.lazy), so findBy* queries
+// must wait for the dynamic chunk to resolve + mount — the 1s default
+// times out under parallel-worker load. 5s covers it comfortably.
+import { configure } from '@testing-library/dom';
+configure({ asyncUtilTimeout: 5_000 });
+
 // jsdom (the Vitest default for `environment: 'jsdom'`) doesn't ship a
 // ResizeObserver implementation, but react-resizable-panels and several
 // Radix primitives rely on one. Provide a no-op stub so render-time

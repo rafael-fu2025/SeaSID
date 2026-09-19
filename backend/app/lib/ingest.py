@@ -13,6 +13,7 @@ without touching this module.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 
@@ -24,8 +25,14 @@ from app.lib.providers import (
     get_weather_provider,
 )
 from app.lib.tides import fetch_tides
+from app.lib.weather import fetch_archive
 
 logger = logging.getLogger(__name__)
+
+
+def _now_utc() -> datetime:
+    """Ingest timestamp for provenance (audit F-B1-17)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _naive_utc(ts):
@@ -36,8 +43,11 @@ def _naive_utc(ts):
     single representation. All callers in this module feed tz-aware
     UTC datetimes on the write path and read back naive values, so we
     normalise on both sides to avoid silent misses.
+
+    Canonical implementation lives in :mod:`app.lib.timeutil` (F-B1-23).
     """
-    return ts.replace(tzinfo=None) if ts and ts.tzinfo else ts
+    from app.lib.timeutil import strip_tz_utc
+    return strip_tz_utc(ts)
 
 
 def _existing_ts(session, model, site_key: str, ts_values: list) -> set:
@@ -81,6 +91,7 @@ def _persist_weather(site_key: str, rows: list[dict]) -> int:
                 wave_max_m=row.get("wave_max_m", 0.0),
                 sea_temp_c=row.get("sea_temp_c"),
                 source=row.get("source"),
+                ingested_at=_now_utc(),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
         session.commit()
@@ -116,6 +127,7 @@ def _persist_marine(site_key: str, rows: list[dict]) -> int:
                 current_speed_ms=row.get("current_speed_ms"),
                 current_direction_deg=row.get("current_direction_deg"),
                 source=row.get("source"),
+                ingested_at=_now_utc(),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
         session.commit()
@@ -161,6 +173,7 @@ def _persist_air(site_key: str, snapshot: dict | None) -> int:
             distance_km=snapshot.get("distance_km"),
             quality=snapshot.get("quality"),
             source=snapshot.get("source"),
+            ingested_at=_now_utc(),
         ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
         result = session.execute(stmt)
         session.commit()
@@ -189,6 +202,8 @@ def _persist_tides(site_key: str, rows: list[dict]) -> int:
                 site_key=site_key,
                 ts=row["ts"],
                 height_m=row["height_m"],
+                source="worldtides",
+                ingested_at=_now_utc(),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
         session.commit()
@@ -254,9 +269,6 @@ def ingest_site(site_key: str, hours: int = 48, archive_days: int = 7) -> dict:
     archive_inserted = 0
     if archive_days > 0:
         try:
-            from datetime import datetime, timezone, timedelta
-            from app.lib.weather import fetch_archive
-
             end_date = datetime.now(timezone.utc).date()
             start_date = end_date - timedelta(days=archive_days)
             archive_rows = fetch_archive(
@@ -320,6 +332,8 @@ def ingest_archive(site_key: str, start_date: str, end_date: str) -> dict:
                 wind_mean_kmh=row["wind_mean_kmh"],
                 wave_max_m=row["wave_max_m"],
                 sea_temp_c=row["sea_temp_c"],
+                source="open_meteo_archive",
+                ingested_at=_now_utc(),
             ).on_conflict_do_nothing(index_elements=["site_key", "ts"])
             session.execute(stmt)
         session.commit()

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, Sparkles, AlertTriangle, Activity, Wind, Droplets, Thermometer,
   ChevronLeft, ChevronRight,
@@ -14,7 +14,10 @@ import { PBadChart } from '@/components/PBadChart';
 import { RiskBadge, ProbabilityMeter } from '@/components/RiskBadge';
 import { SiteSelector } from '@/components/SiteSelector';
 import { ForecastProvenance } from '@/components/ForecastProvenance';
+import { FreshnessStack } from '@/components/FreshnessBadge';
 import ActiveLearningNudge from '@/components/ActiveLearningNudge';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
+import { getInitialSiteKey } from '@/lib/sitePrefs';
 import { cn } from '@/lib/utils';
 
 const level = (p) => (p >= 0.6 ? 'high' : p >= 0.3 ? 'moderate' : 'low');
@@ -26,6 +29,9 @@ const aqiLevel = (aqi) => {
   return 'low';
 };
 
+// fmtTime renders in the VIEWER's timezone (audit F-F2-01: the previous
+// label appended "UTC" while toLocaleTimeString renders local — a false
+// claim that mislabeled times by the operator's UTC offset).
 const fmtTime = (iso) =>
   new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -48,7 +54,7 @@ const fmtTimeFull = (iso) =>
  * Refresh action can re-fetch without prop-drilling.
  */
 export default function Dashboard() {
-  const [selectedSite, setSelectedSite] = useState('dauin_muck');
+  const [selectedSite, setSelectedSite] = useState(getInitialSiteKey);
   const [forecast, setForecast] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,46 +62,48 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [windowHours, setWindowHours] = useState(48);
   const [timelinePage, setTimelinePage] = useState(0);
-  const cancelRef = useRef(false);
+  // Audit F-F2-03: monotonic request token instead of a shared boolean —
+  // a quick site switch used to let the older response win and render.
+  const { begin, isCurrent } = useLatestRequest();
 
-  const load = useCallback(async (siteKey) => {
-    cancelRef.current = false;
+  const load = useCallback(async (siteKey, { isCurrent }) => {
+    const token = begin();
     setError(null);
     try {
       const [fc, al] = await Promise.all([
         api.getForecast(siteKey, 48),
         api.getAlerts(siteKey),
       ]);
-      if (cancelRef.current) return;
+      if (!isCurrent(token)) return;
       setForecast(fc);
       setAlerts(al.alerts || []);
     } catch (err) {
-      if (!cancelRef.current) setError(err.message);
+      if (isCurrent(token)) setError(err.message);
     } finally {
-      if (!cancelRef.current) setLoading(false);
+      if (isCurrent(token)) setLoading(false);
     }
-  }, []);
+  }, [begin]);
 
   // Initial load + reload on site change
   useEffect(() => {
     setLoading(true);
-    load(selectedSite);
-    return () => { cancelRef.current = true; };
-  }, [selectedSite, load]);
+    load(selectedSite, { isCurrent });
+    return () => {};
+  }, [selectedSite, load, isCurrent]);
 
   // ⌘K palette "refresh" event
   useEffect(() => {
     const handler = () => {
       setRefreshing(true);
-      load(selectedSite).finally(() => setRefreshing(false));
+      load(selectedSite, { isCurrent }).finally(() => setRefreshing(false));
     };
     window.addEventListener('seasid:refresh', handler);
     return () => window.removeEventListener('seasid:refresh', handler);
-  }, [selectedSite, load]);
+  }, [selectedSite, load, isCurrent]);
 
   const refresh = () => {
     setRefreshing(true);
-    load(selectedSite).finally(() => setRefreshing(false));
+    load(selectedSite, { isCurrent }).finally(() => setRefreshing(false));
   };
 
   const currentHour = forecast?.hours?.[0];
@@ -163,20 +171,53 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* Alerts banner */}
-      {!loading && alerts.length > 0 && (
-        <Card className="border-warning/30 bg-warning/5">
+      {/* Alerts banner — deduplicated by kind (audit F-F2-12): a storm
+          that re-fires hourly alerts shows one entry per condition. */}
+      {!loading && alerts.length > 0 && (() => {
+        const seen = new Set();
+        const uniqueAlerts = alerts.filter((a) => {
+          if (seen.has(a.kind)) return false;
+          seen.add(a.kind);
+          return true;
+        });
+        return (
+          <Card className="border-warning/30 bg-warning/5">
+            <CardContent className="flex items-start gap-3 p-4">
+              <AlertTriangle className="mt-0.5 size-4 text-warning" />
+              <div className="text-sm">
+                <p className="font-medium text-warning">
+                  {uniqueAlerts.length} active alert{uniqueAlerts.length === 1 ? '' : 's'}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {uniqueAlerts.slice(0, 3).map((a) => `[${a.kind}] ${a.message}`).join(' · ')}
+                  {uniqueAlerts.length > 3 && ` · +${uniqueAlerts.length - 3} more`}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      {/* Degraded-data warning (audit F-F2-02): `degraded` lists sources
+          that are stale/unavailable; fallback_hours counts hours served by
+          the rule scorer instead of the model. Never render these as if
+          everything were nominal. */}
+      {!loading && forecast && (forecast.degraded?.length > 0 || forecast.fallback_hours > 0) && (
+        <Card className="border-warning/30 bg-warning/5" data-testid="dashboard-degraded">
           <CardContent className="flex items-start gap-3 p-4">
             <AlertTriangle className="mt-0.5 size-4 text-warning" />
-            <div className="text-sm">
-              <p className="font-medium text-warning">
-                {alerts.length} active alert{alerts.length === 1 ? '' : 's'}
-              </p>
+            <div className="flex-1 text-sm">
+              <p className="font-medium text-warning">Forecast quality is degraded</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {alerts.slice(0, 3).map((a) => `[${a.kind}] ${a.message}`).join(' · ')}
-                {alerts.length > 3 && ` · +${alerts.length - 3} more`}
+                {forecast.fallback_hours > 0 &&
+                  `${forecast.fallback_hours} of ${forecast.hours?.length ?? 0} hours served by the rule-based fallback (model unavailable). `}
+                {forecast.degraded?.length > 0 && forecast.degraded.join(' · ')}
               </p>
             </div>
+            <FreshnessStack
+              freshness={forecast.freshness || []}
+              degradedReasons={forecast.degraded || []}
+            />
           </CardContent>
         </Card>
       )}
@@ -187,7 +228,7 @@ export default function Dashboard() {
       {!loading && selectedSite && (
         <ActiveLearningNudge
           siteKey={selectedSite}
-          onVerified={() => load(selectedSite)}
+          onVerified={() => load(selectedSite, { isCurrent })}
         />
       )}
 
@@ -211,7 +252,7 @@ export default function Dashboard() {
           <KpiCard
             label="Visibility"
             value={currentHour.viz_label ?? '—'}
-            sub={`${fmtTime(currentHour.ts)} UTC`}
+            sub={fmtTime(currentHour.ts)}
             Icon={Droplets}
           />
           <KpiCard

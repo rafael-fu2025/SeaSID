@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-07-29T21:14:38.155911+00:00",
+  "seed": 42,
+  "days_per_site": 1460,
+  "sites": [
+    "dauin_muck",
+    "apo_reef"
+  ],
+  "first_labelled_day": "2022-04-20",
+  "source_tag": "synthetic_scenario",
+  "hourly_obs_written": 70224,
+  "labels_written": 2920,
+  "class_balance": {
+    "dive": 1318,
+    "poor_viz": 459,
+    "no_dive": 1143
+  },
+  "scenario_label_counts": {
+    "calm_dry": 1245,
+    "fair": 571,
+    "breezy": 328,
+    "rainy_habagat": 208,
+    "squall": 185,
+    "tropical_storm": 121,
+    "post_storm": 262
+  },
+  "scenario_files": [
+    "calm_dry.csv",
+    "fair.csv",
+    "breezy.csv",
+    "rainy_habagat.csv",
+    "squall.csv",
+    "tropical_storm.csv",
+    "post_storm.csv"
+  ],
+  "feature_columns": [
+    "precip_24h_mm",
+    "precip_48h_mm",
+    "precip_recent_3h",
+    "wind_max_24h_kmh",
+    "wind_mean_24h_kmh",
+    "wave_max_24h_m",
+    "sea_temp_mean_24h",
+    "tide_max_24h_m",
+    "tide_min_24h_m",
+    "tide_range_24h_m",
+    "is_muck_site",
+    "aqi_recent",
+    "pm25_recent",
+    "wave_period_s_mean"
+  ]
+}

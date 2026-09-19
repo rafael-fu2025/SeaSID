@@ -35,6 +35,10 @@ RESULTS_PATH = DATA_DIR / "experiment_results.json"
 
 METRICS_LIST = ["accuracy", "precision", "recall", "f1", "auc_roc"]
 
+
+class ExperimentCancelled(RuntimeError):
+    """Raised when the operator cancels a running suite (audit F-F6-01)."""
+
 # Default sequence lookback — gap between train and val/test must be at least
 # this many days to prevent temporal context leakage for the LSTM.
 DEFAULT_SEQ_LEN_HOURS = 24
@@ -119,6 +123,23 @@ def _time_aware_split(
             )
         train_order = kept_train
 
+    # Audit F-B2-09: purge the val/test boundary as well — the val block is
+    # used for early stopping/selection, and its last days share 23/24
+    # lookback hours with the first test days.
+    if val_order and test_order and purge_days > 0:
+        test_start = min(label_dates[i] for i in test_order)
+        kept_val = [
+            i for i in val_order
+            if (test_start - label_dates[i]).days > purge_days
+        ]
+        dropped = len(val_order) - len(kept_val)
+        if dropped:
+            logger.info(
+                "Purged %d val labels within %d day(s) of test boundary %s",
+                dropped, purge_days, test_start,
+            )
+        val_order = kept_val
+
     def _window(indices: list[int]) -> dict:
         if not indices:
             return {"start": None, "end": None, "count": 0}
@@ -148,8 +169,10 @@ def run_full_experiment_suite(
     y_arr: np.ndarray,
     label_dates: Sequence[date] | None = None,
     label_site_keys: Sequence[str] | None = None,
+    label_sources: Sequence[str] | None = None,
     progress_callback=None,
     metric_callback=None,
+    cancel_event=None,
 ) -> dict:
     """
     Run the complete experiment suite:
@@ -163,6 +186,11 @@ def run_full_experiment_suite(
     When ``label_dates`` is provided, the split is time-aware (see
     :func:`_time_aware_split`). Otherwise the legacy random stratified
     split is used so unit tests that fabricate indices stay deterministic.
+
+    ``cancel_event`` (audit F-F6-01) is an optional ``threading.Event``;
+    when set, the next checkpoint between models/ablations raises
+    :class:`ExperimentCancelled` so the run stops server-side instead of
+    merely detaching the UI.
 
     ``progress_callback`` is an optional ``callable(str) -> None`` invoked
     with one human-readable line per step. The streaming endpoint at
@@ -215,7 +243,12 @@ def run_full_experiment_suite(
 
     n_total = len(X_flat)
 
+    def _check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExperimentCancelled("run cancelled by operator")
+
     _log(f"Running experiments on {n_total} samples...")
+    _check_cancel()
 
     # ── 1. Split data ──────────────────────────────────────────────────
     if label_dates is not None and len(label_dates) == n_total:
@@ -285,6 +318,17 @@ def run_full_experiment_suite(
             list(label_site_keys), test_idx,
         )
 
+    # Audit F-B2-05: surface label provenance (operator vs synthetic_rule)
+    # so experiment readers can tell real-world skill from bootstrap metrics.
+    if label_sources is not None and len(label_sources) == n_total:
+        dataset_summary["per_source_total"] = dict(
+            sorted({s: sum(1 for x in label_sources if x == s)
+                    for s in set(label_sources)}.items())
+        )
+        dataset_summary["per_source_test"] = _per_site_test_counts(
+            list(label_sources), test_idx,
+        )
+
     _log(f"  Train: {len(X_train_f)}, Val: {len(X_val_f)}, Test: {len(X_test_f)}")
 
     # ── 2. Train and evaluate models ───────────────────────────────────
@@ -298,6 +342,7 @@ def run_full_experiment_suite(
     _emit_metric("rule", rule_metrics)
 
     # Baseline 2: XGBoost
+    _check_cancel()
     _log("  Training: XGBoost (Baseline 2)...")
     xgb_metrics = _train_and_evaluate_xgb(X_train_f, y_train, X_test_f, y_test)
     model_results["xgb"] = xgb_metrics
@@ -305,24 +350,32 @@ def run_full_experiment_suite(
     _emit_metric("xgb", xgb_metrics)
 
     # Primary: LSTM
+    _check_cancel()
     _log("  Training: LSTM (Primary)...")
+    train_label_dates = (
+        [label_dates[i] for i in train_idx] if label_dates is not None else None
+    )
     lstm_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="lstm",
+        label_dates=train_label_dates,
     )
     model_results["lstm"] = lstm_metrics
     _log(f"    F1: {lstm_metrics.get('f1', 'N/A'):.4f}")
     _emit_metric("lstm", lstm_metrics)
 
     # Ablation: GRU
+    _check_cancel()
     _log("  Training: GRU (Ablation)...")
     gru_metrics = _train_and_evaluate_lstm(
         X_train_seq, y_train_arr, X_test_seq, y_test_arr, arch="gru",
+        label_dates=train_label_dates,
     )
     model_results["gru"] = gru_metrics
     _log(f"    F1: {gru_metrics.get('f1', 'N/A'):.4f}")
     _emit_metric("gru", gru_metrics)
 
     # ── 3. Ablation studies ────────────────────────────────────────────
+    _check_cancel()
     _log("\n  Running ablation studies...")
     ablations = _run_ablations(X_train_seq, y_train_arr, X_test_seq, y_test_arr)
 
@@ -342,8 +395,11 @@ def run_full_experiment_suite(
         "best_model": best_model,
     }
 
-    with open(RESULTS_PATH, "w") as f:
+    import os
+    tmp_path = RESULTS_PATH.with_suffix(".json.tmp")
+    with open(tmp_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
+    os.replace(tmp_path, RESULTS_PATH)
 
     _log(f"\n  Results saved to {RESULTS_PATH}")
     _log(f"  Best model: {best_model} (F1: {model_results[best_model].get('f1', 'N/A'):.4f})")
@@ -395,8 +451,14 @@ def _train_and_evaluate_lstm(
     X_test_seq: np.ndarray,
     y_test: np.ndarray,
     arch: str = "lstm",
+    label_dates: Sequence[date] | None = None,
 ) -> dict:
-    """Train LSTM/GRU on training set and evaluate on test set."""
+    """Train LSTM/GRU on training set and evaluate on test set.
+
+    Audit F-B2-08: the train block's own early-stopping split must be
+    time-aware (passing label_dates) — a random shuffle of contiguous days
+    shares 23/24 lookback hours between train and val.
+    """
     from app.lib.model_lstm import train_lstm, predict_proba_lstm, LSTMTrainConfig
 
     config = LSTMTrainConfig(
@@ -411,7 +473,7 @@ def _train_and_evaluate_lstm(
         arch=arch,
     )
 
-    result = train_lstm(X_train_seq, y_train, config)
+    result = train_lstm(X_train_seq, y_train, config, label_dates=label_dates)
     bundle = {
         "model": result.model,
         "scaler": result.scaler,

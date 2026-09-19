@@ -12,13 +12,26 @@ plus the legacy feature-build failure.
 """
 from __future__ import annotations
 
-import pytest
+
+def _reset_model_cache():
+    """Isolate from other tests: clear the tier/rules caches (audit F-B2-01)."""
+    import app.lib.model as model
+
+    model._cached_bundle = None
+    model._selected_tier = None
+    model._selection_reason = None
+    model._lstm_rejection_reason = None
+    model._xgb_rejection_reason = None
+    model._cached_none_at = None
 
 
 def test_fallback_when_batch_predict_crashes(monkeypatch):
-    """Simulate the LSTM batch predict crashing and confirm every hour falls back."""
+    """Simulate the LSTM batch predict crashing and confirm every hour is
+    served by the rule scorer, explicitly labeled (audit F-B3-02)."""
     from app.api import services
     from app.lib import model_lstm
+
+    _reset_model_cache()
 
     def boom(*args, **kwargs):
         raise ValueError("simulated model crash (e.g. stale bundle)")
@@ -35,17 +48,16 @@ def test_fallback_when_batch_predict_crashes(monkeypatch):
     assert result["fallback_hours"] == 6, "every hour should fall back"
     assert result["forecast_source"] == "lstm"
 
-    # Per-hour shape: every hour must have a real (non-Unknown, non-0.5) value.
+    # Per-hour shape: every hour must be flagged AND served by the rules —
+    # the Phase-0 fabricated 0.5 must never come back.
     for h in result["hours"]:
         assert h["degraded_reason"] is not None
-        assert "ValueError" in h["degraded_reason"]
-        assert h["model_used"] == "lstm"
-        # The hard-coded 0.5 fallback is gone. Either p_bad is a real
-        # number (0.10 / 0.45 / 0.85 from the rule scorer). In our test
-        # environment predict() always crashes, so it must equal a rule
-        # value — never the meaningless 0.5 that caused the original bug.
-        assert h["p_bad"] == 0.5
-        assert h["viz_label"] != "Unknown" or h["risk"] == "Unknown"
+        assert h["degraded_reason"].startswith("lstm_predict_failed")
+        assert h["model_used"] == "rule_based"
+        assert h["degraded"] is True
+        # With the (near-)empty test feature set the rules scorer yields
+        # its "Low" level, never the meaningless 0.5.
+        assert h["p_bad"] == 0.10
 
 
 def test_fallback_does_not_swallow_feature_build_failure(monkeypatch):
@@ -68,8 +80,9 @@ def test_fallback_does_not_swallow_feature_build_failure(monkeypatch):
         assert "RuntimeError" in h["degraded_reason"]
 
 
-def test_failed_lstm_is_not_replaced_by_rules(monkeypatch):
-    """A failed LSTM reports a neutral degraded value, never a rule score."""
+def test_failed_lstm_is_replaced_by_labeled_rules(monkeypatch):
+    """A failed LSTM hour is served by the rule scorer with an explicit
+    label — the old fabricated neutral 0.5 is banned (audit F-B3-02)."""
     from app.api import services
     from app.lib import model_lstm
 
@@ -82,8 +95,9 @@ def test_failed_lstm_is_not_replaced_by_rules(monkeypatch):
 
     result = services.get_forecast("dauin_muck", hours=2)
 
-    # First hour's p_bad must match the rule-based value (within rounding).
-    assert result["hours"][0]["p_bad"] == pytest.approx(0.5)
+    hour = result["hours"][0]
+    assert hour["model_used"] == "rule_based"
+    assert hour["p_bad"] in (0.10, 0.45, 0.85)
 
 
 def test_no_fallback_when_predict_succeeds():
@@ -110,11 +124,14 @@ def test_no_fallback_when_predict_succeeds():
     assert not all(round(p, 3) == 0.5 for p in p_bads), (
         "every hour fell back to 0.5 — Phase-0 symptom has regressed."
     )
-    # And no hour should have a degraded_reason — predict() must succeed
-    # either way (real model or rules).
+    # No hour may have a *prediction* failure — predict() must succeed either
+    # way (real model or rules). A `low_data_coverage` flag is acceptable and
+    # honest (audit F-B1-02): it marks hours whose trailing weather window is
+    # partially empty, e.g. in a fresh test DB, and is not a prediction error.
     for h in result["hours"]:
-        assert h["degraded_reason"] is None, (
-            f"hour {h['ts']} unexpectedly fell back: {h['degraded_reason']}"
+        reason = h["degraded_reason"]
+        assert reason is None or reason.startswith("low_data_coverage"), (
+            f"hour {h['ts']} unexpectedly fell back: {reason}"
         )
     # forecast_source is one of the three legitimate values.
     assert result["forecast_source"] in {"lstm", "xgboost", "rule_based"}, (

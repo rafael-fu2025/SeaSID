@@ -71,6 +71,7 @@ def _latest_ts(session: Session, model, site_key: str) -> datetime | None:
 
 
 def _classify(
+    source: str,
     last_observed: datetime | None,
     now: datetime,
     live_h: float,
@@ -78,10 +79,9 @@ def _classify(
     provider: str | None,
 ) -> SourceFreshness:
     """Classify one source's freshness against the policy."""
-    src = "??"  # overwritten by callers; placeholder until dataclass is built
     if last_observed is None:
         return SourceFreshness(
-            source=src,
+            source=source,
             status="unavailable",
             last_observed_at=None,
             age_hours=None,
@@ -103,7 +103,7 @@ def _classify(
         status = "unavailable"
 
     return SourceFreshness(
-        source=src,
+        source=source,
         status=status,
         last_observed_at=last_observed.isoformat(),
         age_hours=round(age_hours, 2),
@@ -137,43 +137,50 @@ def compute_freshness(
     session = db.SessionLocal()
     try:
         weather = _classify(
+            "weather",
             _latest_ts(session, db.WeatherObs, site_key),
             now,
             WEATHER_LIVE_HOURS,
             WEATHER_STALE_HOURS,
             providers.get("weather"),
         )
-        weather.source = "weather"
 
         marine = _classify(
+            "marine",
             _latest_ts(session, db.MarineObs, site_key),
             now,
             MARINE_LIVE_HOURS,
             MARINE_STALE_HOURS,
             providers.get("marine"),
         )
-        marine.source = "marine"
 
+        # Audit F-B1-11: tides come from WorldTides (a DB key), not from the
+        # weather provider — report the real provenance.
+        try:
+            from app.lib.tides import tides_enabled
+            tide_provider = "worldtides" if tides_enabled() else None
+        except Exception:
+            tide_provider = None
         tide = _classify(
+            "tide",
             _latest_ts(session, db.TideObs, site_key),
             now,
             TIDE_LIVE_HOURS,
             TIDE_STALE_HOURS,
-            providers.get("weather"),  # tides piggy-back on weather provider for now
+            tide_provider,
         )
-        tide.source = "tide"
 
         out = [weather, marine, tide]
 
         if not air_disabled:
             air = _classify(
+                "air",
                 _latest_ts(session, db.AirQualityObs, site_key),
                 now,
                 AIR_LIVE_HOURS,
                 AIR_STALE_HOURS,
                 providers.get("air"),
             )
-            air.source = "air"
             out.append(air)
 
         return out

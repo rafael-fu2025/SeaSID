@@ -1,6 +1,7 @@
 import { cva } from 'class-variance-authority';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { level as probabilityLevel } from '@/lib/riskLevels';
 
 /**
  * RiskBadge — Semantic risk indicator.
@@ -52,7 +53,7 @@ export function RiskBadge({ risk, className, ...props }) {
 
 export function ProbabilityMeter({ value = 0, label = 'No-go probability' }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
-  const level = pct >= 60 ? 'high' : pct >= 30 ? 'moderate' : 'low';
+  const level = probabilityLevel(value);
   const tone =
     level === 'high' ? 'bg-danger' :
     level === 'moderate' ? 'bg-warning' :

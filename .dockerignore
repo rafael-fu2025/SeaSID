@@ -1,0 +1,22 @@
+# Keep secrets and local state out of the image (audit F-C2-01):
+# `COPY backend/ .` must never bake the live database, its master key,
+# or env files into image layers.
+backend/data/
+backend/.env
+backend/.env.*
+backend/.venv/
+backend/.pytest_cache/
+**/__pycache__/
+*.key
+
+frontend/node_modules/
+frontend/dist/
+frontend/.tmp_*.png
+
+.git/
+.github/
+docs/
+backups/
+*.db
+*.db-shm
+*.db-wal

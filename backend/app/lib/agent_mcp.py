@@ -274,6 +274,31 @@ _key_id_in_use: int | None = None
 _lock = threading.Lock()
 
 
+def _subprocess_env(api_key: str) -> dict:
+    """Minimal environment for the MCP subprocess (audit F-B5-04).
+
+    Inheriting the full server environment hands every deployment secret
+    (SMTP credentials, DB encryption key, JWT secret) to a tool subprocess.
+    Only the variables the MCP needs are passed through; add to this list
+    deliberately.
+    """
+    passthrough = {}
+    for key in (
+        "PATH", "HOME", "TEMP", "TMP", "LANG", "SYSTEMROOT", "COMSPEC",
+        "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "SYSTEMDRIVE", "WINDIR",
+        "UV_CACHE_DIR", "UV_PYTHON",
+    ):
+        value = os.environ.get(key)
+        if value is not None:
+            passthrough[key] = value
+    passthrough.update({
+        "MINIMAX_API_KEY": api_key,
+        "MINIMAX_API_HOST": os.getenv("MINIMAX_API_HOST", "https://api.minimax.io"),
+        "MINIMAX_MCP_BASE_PATH": str(_resolve_base_path()),
+    })
+    return passthrough
+
+
 async def _spawn_session(api_key: str) -> _McpSession:
     """Spawn the ``minimax-coding-plan-mcp`` subprocess and initialize it."""
     uvx = _resolve_uvx()
@@ -282,13 +307,7 @@ async def _spawn_session(api_key: str) -> _McpSession:
             "`uvx` is not on PATH. Install uv (https://docs.astral.sh/uv/) "
             "or disable the MiniMax MCP via SEASID_MCP_MINIMAX_ENABLED=false."
         )
-    base_path = _resolve_base_path()
-    env = {
-        **os.environ,
-        "MINIMAX_API_KEY": api_key,
-        "MINIMAX_API_HOST": os.getenv("MINIMAX_API_HOST", "https://api.minimax.io"),
-        "MINIMAX_MCP_BASE_PATH": str(base_path),
-    }
+    env = _subprocess_env(api_key)
     try:
         proc = await asyncio.create_subprocess_exec(
             uvx,

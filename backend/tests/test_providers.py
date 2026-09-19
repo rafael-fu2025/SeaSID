@@ -131,13 +131,19 @@ def test_air_provider_disabled_when_off(monkeypatch):
     assert get_air_provider() is None
 
 
-def test_registry_unknown_provider_falls_back(monkeypatch):
-    """Unknown provider name falls back to Open-Meteo."""
+def test_registry_unknown_provider_fails_fast(monkeypatch):
+    """Unknown provider name raises instead of silently serving Open-Meteo.
+
+    Audit F-B6-05: a typo'd env var silently serving a different provider
+    makes the provenance chips lie about the data source.
+    """
+    import pytest
+
     monkeypatch.setenv("SEASID_PROVIDER_WEATHER", "nope-not-real")
     from app.lib.providers import reset_registry, get_weather_provider
     reset_registry()
-    p = get_weather_provider()
-    assert p.info.name == "open_meteo"
+    with pytest.raises(ValueError, match="SEASID_PROVIDER_WEATHER"):
+        get_weather_provider()
 
 
 # ── Feature vector: 11 → 14 ───────────────────────────────────────────────

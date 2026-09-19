@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/api';
+import { useAuth } from '@/auth/AuthContext';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -9,6 +10,9 @@ import { Skeleton } from '@/components/ui/skeleton';
  * SiteSelector — shadcn Select wrapper that pulls registered sites from
  * the backend and lets the caller observe the chosen key via onChange.
  *
+ *  - Audit F-F3-03: sites outside the signed-in user's scope are hidden —
+ *    a site-scoped operator used to be able to select another site and get
+ *    a raw 403 from the page.
  *  - Default value is `defaultValue` and falls back to `value` if no
  *    sites are loaded yet.
  *  - Renders a shadcn Skeleton while sites are loading so the page
@@ -24,6 +28,7 @@ export function SiteSelector({
   ariaLabel = 'Select dive site',
   sites: providedSites,
 }) {
+  const { user } = useAuth();
   const [fetched, setFetched] = useState(null);
   const [error, setError] = useState(null);
 
@@ -36,14 +41,29 @@ export function SiteSelector({
     return () => { cancel = true; };
   }, [providedSites]);
 
-  const sites = providedSites ?? fetched;
-  if (sites === null && !error) {
+  const allSites = providedSites ?? fetched;
+
+  // Scope filter: '*' sees everything; otherwise only listed site keys.
+  // No auth context (or a null user) → show all: the server still enforces
+  // scope, and tests/standalone renders must not hide every option.
+  const scope = user?.site_keys;
+  const allowed = !scope || scope.includes('*')
+    ? allSites
+    : (allSites || []).filter((s) => scope.includes(s.key));
+
+  const sites = allowed;
+  if (allSites === null && !error) {
     return <Skeleton className="h-9 w-full" />;
   }
-  if (error || (sites && sites.length === 0)) {
+  if (error) {
+    return (
+      <div className="text-xs text-muted-foreground">Sites API offline</div>
+    );
+  }
+  if (sites && sites.length === 0) {
     return (
       <div className="text-xs text-muted-foreground">
-        {error ? 'Sites API offline' : 'No sites registered'}
+        {providedSites ? 'No sites registered' : 'No sites assigned to your account'}
       </div>
     );
   }

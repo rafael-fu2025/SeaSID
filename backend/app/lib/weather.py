@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -24,6 +25,13 @@ MAX_RETRIES = 3
 BACKOFF_SECONDS = [1, 2, 4]
 
 
+def _jittered_sleep(seconds: float) -> None:
+    """Sleep ``seconds`` + up to 50% jitter (audit F-B6-04: avoids retry
+    thundering-herds when a provider recovers)."""
+    import random
+    time.sleep(seconds + random.uniform(0, seconds * 0.5))
+
+
 def _retry_get(url: str, params: dict, label: str = "") -> dict | None:
     """GET with exponential backoff. Returns JSON dict or None on total failure."""
     for attempt in range(MAX_RETRIES):
@@ -34,10 +42,10 @@ def _retry_get(url: str, params: dict, label: str = "") -> dict | None:
         except (requests.RequestException, ValueError) as exc:
             wait = BACKOFF_SECONDS[attempt] if attempt < len(BACKOFF_SECONDS) else 4
             logger.warning(
-                "%s attempt %d/%d failed: %s — retrying in %ds",
+                "%s attempt %d/%d failed: %s — retrying in ~%ds",
                 label, attempt + 1, MAX_RETRIES, exc, wait,
             )
-            time.sleep(wait)
+            _jittered_sleep(wait)
     logger.error("%s: all %d attempts failed", label, MAX_RETRIES)
     return None
 
@@ -98,8 +106,15 @@ def fetch_forecast(
     marine_data = _retry_get(MARINE_URL, marine_params, label="Open-Meteo Marine")
 
     if data is None:
-        logger.warning("Forecast API failed — using synthetic fallback")
-        return _synthetic_forecast(lat, lon, past_hours, forecast_hours)
+        # Audit F-B1-01: on total provider failure we persist nothing and let
+        # freshness report "unavailable". Fabricated data indistinguishable
+        # from real observations is the worst failure mode for a
+        # dive-safety product. Smoke scripts may opt back in explicitly.
+        if os.getenv("SEASID_ALLOW_SYNTHETIC", "").strip() == "1":
+            logger.warning("Forecast API failed — SYNTHETIC fallback enabled by env")
+            return _synthetic_forecast(lat, lon, past_hours, forecast_hours)
+        logger.error("Forecast API failed — returning no rows (no synthetic fallback)")
+        return []
 
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
@@ -132,7 +147,8 @@ def fetch_forecast(
 
 # ── Archive (historical, up to 90 days) ───────────────────────────────────
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
-MARINE_ARCHIVE_URL = "https://marine-api.open-meteo.com/v1/marine"  # supports past_days
+# The marine host accepts start_date/end_date for the historical (ERA5) range.
+MARINE_ARCHIVE_URL = "https://marine-api.open-meteo.com/v1/marine"
 
 
 def fetch_archive(
@@ -145,6 +161,11 @@ def fetch_archive(
     Pull historical hourly weather from Open-Meteo Archive API.
     start_date / end_date format: 'YYYY-MM-DD'.
     Returns same shape as fetch_forecast.
+
+    Audit F-B1-05: the historical *marine* archive (ERA5/WAM, from 1950)
+    provides real wave height + sea surface temperature, so historical
+    training rows no longer hardcode wave_max_m = 0.0. Wave period cannot
+    be stored through the weather_obs schema and stays out of the merge.
     """
     params = {
         "latitude": lat,
@@ -157,8 +178,12 @@ def fetch_archive(
     data = _retry_get(ARCHIVE_URL, params, label="Open-Meteo Archive")
 
     if data is None:
-        logger.warning("Archive API failed — using synthetic fallback")
-        return _synthetic_archive(lat, lon, start_date, end_date)
+        # Audit F-B1-01 — see fetch_forecast. No silent fabrication.
+        if os.getenv("SEASID_ALLOW_SYNTHETIC", "").strip() == "1":
+            logger.warning("Archive API failed — SYNTHETIC fallback enabled by env")
+            return _synthetic_archive(lat, lon, start_date, end_date)
+        logger.error("Archive API failed — returning no rows (no synthetic fallback)")
+        return []
 
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
@@ -166,15 +191,30 @@ def fetch_archive(
     wind_speed = hourly.get("wind_speed_10m", [])
     wind_gusts = hourly.get("wind_gusts_10m", [])
 
+    # Historical marine (may be None on failure — waves then stay 0.0 as before)
+    marine_params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "wave_height,sea_surface_temperature",
+        "start_date": start_date,
+        "end_date": end_date,
+        "timezone": "UTC",
+    }
+    marine_data = _retry_get(MARINE_ARCHIVE_URL, marine_params, label="Open-Meteo Marine Archive")
+    marine_hourly = (marine_data or {}).get("hourly", {})
+    wave_height = marine_hourly.get("wave_height", [])
+    sea_temp = marine_hourly.get("sea_surface_temperature", [])
+
     rows = []
     for i, t in enumerate(times):
+        sea_temp_value = _safe_float(sea_temp, i, default=None)
         rows.append({
             "ts": datetime.fromisoformat(t).replace(tzinfo=timezone.utc),
             "precip_mm": _safe_float(precip, i),
             "wind_max_kmh": _safe_float(wind_gusts, i),
             "wind_mean_kmh": _safe_float(wind_speed, i),
-            "wave_max_m": 0.0,   # archive may not have marine data
-            "sea_temp_c": None,
+            "wave_max_m": _safe_float(wave_height, i),
+            "sea_temp_c": sea_temp_value,
         })
 
     logger.info("Fetched %d archive hours for (%.4f, %.4f) [%s → %s]",

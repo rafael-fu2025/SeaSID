@@ -32,15 +32,24 @@ ALERT_THRESHOLDS = {
     "strong_current": {"tide_range_24h_m": 1.5, "kind": "strong_current", "message": "Large tidal range (>1.5m) — strong currents expected."},
 }
 
+# Audit F-B1-16: during a multi-day storm the per-hour idempotency key alone
+# produced one alert per hour per kind. An event cooldown collapses that to
+# one alert per condition episode; a scheduled check within the cooldown is
+# silently skipped.
+ALERT_EVENT_COOLDOWN_H = float(os.getenv("ALERT_EVENT_COOLDOWN_H", "6"))
+
 
 def check_and_create_alerts(site_key: str) -> list[dict]:
     """
     Check current conditions against thresholds and create alerts.
-    Uses idempotency: won't create duplicate alerts for same site+kind+hour.
+    Idempotent twice over: the (site, kind, ts_hour) unique constraint
+    blocks same-hour duplicates, and the event cooldown skips a kind that
+    already fired within the cooldown window.
 
     Returns list of new alerts created.
     """
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    cooldown_cutoff = now - timedelta(hours=ALERT_EVENT_COOLDOWN_H)
 
     try:
         feat_df = build_features(site_key, now)
@@ -59,18 +68,18 @@ def check_and_create_alerts(site_key: str) -> list[dict]:
             current_value = feat_dict.get(feature_name, 0)
 
             if current_value >= threshold:
-                # Check idempotency
-                existing = (
+                # Event cooldown: this kind already fired recently for this
+                # site — the condition persists but does not need a new alert.
+                recent = (
                     session.query(db.Alert)
                     .filter(
                         db.Alert.site_key == site_key,
                         db.Alert.kind == config["kind"],
-                        db.Alert.ts_hour == now,
+                        db.Alert.ts_hour >= cooldown_cutoff,
                     )
                     .first()
                 )
-
-                if existing:
+                if recent is not None:
                     continue
 
                 message = f"{config['message']} (Current: {current_value:.1f})"
@@ -170,8 +179,12 @@ def _send_email_alerts(site_key: str, alerts: list[dict]) -> bool:
         msg["From"] = user
         msg["To"] = to_addr
 
-        with smtplib.SMTP(host, port) as server:
-            server.starttls()
+        with smtplib.SMTP(host, port, timeout=10) as server:
+            # Audit F-B1-09: explicit timeout (a hung SMTP server used to
+            # block the request thread forever) and certificate-verifying
+            # TLS context (starttls() without one does not verify).
+            import ssl
+            server.starttls(context=ssl.create_default_context())
             server.login(user, password)
             server.sendmail(user, [to_addr], msg.as_string())
 

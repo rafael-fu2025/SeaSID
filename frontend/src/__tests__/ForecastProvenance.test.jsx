@@ -55,12 +55,13 @@ describe('ForecastProvenance', () => {
   it('renders data_as_of, model, and generated timestamps in the metadata grid', () => {
     render(<ForecastProvenance {...baseProps} />);
     const metadata = screen.getByTestId('provenance-section-metadata');
-    // Data as of → UTC timestamp.
-    expect(within(metadata).getByTestId('provenance-data-as-of').textContent).toMatch(/UTC/);
+    // Data as of renders in the viewer's local timezone — the false " UTC"
+    // label was removed (audit F-F2-01), so the text must NOT claim UTC.
+    expect(within(metadata).getByTestId('provenance-data-as-of').textContent).not.toMatch(/UTC/);
     // Model label.
     expect(within(metadata).getByTestId('provenance-model').textContent).toMatch(/rules-fallback-v1/);
     // Generated label only appears when generatedAt differs from dataAsOf.
-    expect(within(metadata).getByTestId('provenance-generated-at').textContent).toMatch(/UTC/);
+    expect(within(metadata).getByTestId('provenance-generated-at').textContent).not.toMatch(/UTC/);
   });
 
   it('omits the Generated row when generatedAt equals dataAsOf', () => {

@@ -209,9 +209,7 @@ describe('AgentFab', () => {
   it('shows a site context selector in the header (roadmap #10)', async () => {
     renderFab();
     fireEvent.click(screen.getByTestId('agent-fab'));
-    const ctx = screen.getByTestId('agent-site-context');
-    expect(ctx).toBeInTheDocument();
-    // The SiteSelector exposes a combobox trigger once sites have loaded.
+    // The header hosts the site picker button (which opens the site menu).
     expect(await screen.findByTestId('agent-site-selector')).toBeInTheDocument();
   });
 

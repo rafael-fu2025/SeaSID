@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.api.schemas import (
     ApiKeyCreate,
@@ -57,6 +57,19 @@ def _require_admin(principal: Principal) -> None:
     ensure_role(principal, "admin")
 
 
+def _ensure_not_self(user_id: int, principal: Principal) -> None:
+    """Audit F-B3-14: an admin must not disable/delete/demote themselves."""
+    from app.lib.user_store import list_users
+
+    me = next((u for u in list_users() if u["subject"] == principal.subject), None)
+    if me is not None and me["id"] == user_id:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot change or delete your own admin account — ask another admin.",
+        )
+
+
 # ── Users ───────────────────────────────────────────────────────────────
 @router.get("/users")
 def list_users(principal: Principal = Depends(get_current_principal)) -> dict:
@@ -82,6 +95,9 @@ def create_user_route(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from app.lib import audit
+    audit.record("admin.user.created", actor=principal.subject,
+                 detail={"username": user.username, "role": user.role})
     return {"user": _user_to_out(user)}
 
 
@@ -92,6 +108,7 @@ def update_user_route(
     principal: Principal = Depends(get_current_principal),
 ) -> dict:
     _require_admin(principal)
+    _ensure_not_self(user_id, principal)
     changes: dict[str, Any] = {}
     if payload.role is not None:
         changes["role"] = payload.role
@@ -109,6 +126,9 @@ def update_user_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+    from app.lib import audit
+    audit.record("admin.user.updated", actor=principal.subject,
+                 detail={"user_id": user_id, "changes": sorted(changes)})
     return {"user": _user_to_out(user)}
 
 
@@ -118,9 +138,12 @@ def delete_user_route(
     principal: Principal = Depends(get_current_principal),
 ) -> None:
     _require_admin(principal)
+    _ensure_not_self(user_id, principal)
     deleted = delete_user(user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
+    from app.lib import audit
+    audit.record("admin.user.deleted", actor=principal.subject, detail={"user_id": user_id})
 
 
 def _user_to_out(user) -> dict:
@@ -169,6 +192,9 @@ def create_api_key(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _reset_provider_registry()
+    from app.lib import audit
+    audit.record("admin.api_key.created", actor=principal.subject,
+                 detail={"provider": payload.provider, "key_id": record.get("id")})
     return {"key": record}
 
 
@@ -212,6 +238,8 @@ def update_api_key(
     if record is None:
         raise HTTPException(status_code=404, detail="API key not found")
     _reset_provider_registry()
+    from app.lib import audit
+    audit.record("admin.api_key.updated", actor=principal.subject, detail={"key_id": key_id})
     return {"key": record}
 
 
@@ -226,6 +254,8 @@ def delete_api_key(
     if not pkeys.delete_provider_key(key_id):
         raise HTTPException(status_code=404, detail="API key not found")
     _reset_provider_registry()
+    from app.lib import audit
+    audit.record("admin.api_key.deleted", actor=principal.subject, detail={"key_id": key_id})
 
 
 @router.post("/api-keys/{key_id}/test")
@@ -279,6 +309,8 @@ def reveal_api_key(
             value = decrypt_str(row.value_encrypted, load_or_create_master_key())
         except Exception:
             raise HTTPException(status_code=500, detail="Could not decrypt value")
+    from app.lib import audit
+    audit.record("admin.api_key.revealed", actor=principal.subject, detail={"key_id": key_id})
     return {
         "id": key_id,
         "provider": keys[0]["provider"],
@@ -286,6 +318,49 @@ def reveal_api_key(
         "value": value,
         "value_preview": keys[0]["value_preview"],
     }
+
+
+@router.post("/model/reload")
+def reload_model(
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    """Reload the ML bundle + calibrator after a retrain (audit F-B2-07).
+
+    Train scripts call this after saving new artifacts so the running API
+    picks them up without a restart. Accepts an admin principal OR the
+    ``SEASID_RELOAD_TOKEN`` header (scripts run outside the user store).
+    """
+    from fastapi import HTTPException
+    import os
+
+    token = request.headers.get("X-Reload-Token", "")
+    expected = os.getenv("SEASID_RELOAD_TOKEN", "").strip()
+    is_admin = principal.role == "admin"
+    if not is_admin and not (expected and token == expected):
+        raise HTTPException(status_code=403, detail="Admin role or reload token required")
+
+    from app.lib.model import reload as model_reload, reload_calibrator, selected_tier
+    from app.api.services import invalidate_forecast_cache
+
+    model_reload()
+    reload_calibrator()
+    invalidate_forecast_cache(None)
+    tier, reason = selected_tier()
+    from app.lib import audit
+    audit.record("admin.model.reloaded", actor=principal.subject, detail={"tier": tier})
+    return {"ok": True, "selected_tier": tier, "reason": reason}
+
+
+@router.get("/audit")
+def list_audit_events(
+    limit: int = 200,
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    """Most recent audit events (admin; audit F-B3-13)."""
+    _require_admin(principal)
+    from app.lib import audit
+    return {"events": audit.recent(limit=min(max(limit, 1), 1000))}
 
 
 def _providers_summary(rows: list[dict]) -> dict[str, dict]:

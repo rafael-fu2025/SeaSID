@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +47,15 @@ from app.lib.scoring import features_dict_from_row, p_bad_from_rules
 
 
 def _load_holdout():
-    """Return ``(y_true, dates)`` for the time-aware holdout (newest 20%)."""
+    """Return ``(y_true, dates)`` for the time-aware holdout (newest 20%).
+
+    Audit F-B2-02: the target must be ``label_to_binary`` (poor_viz counts
+    as no-go) — the previous one-liner treated poor_viz days as "go", so
+    the production calibrator was fit against the wrong semantics and
+    systematically understated risk on marginal days.
+    """
+    from app.lib.scoring import label_to_binary
+
     init_db()
     sess = SessionLocal()
     try:
@@ -58,15 +66,18 @@ def _load_holdout():
     n = len(sorted_labels)
     split_idx = int(n * 0.80)
     holdout = sorted_labels[split_idx:]
-    y = np.array([1 if l.label == "no_dive" else 0 for l in holdout], dtype=int)
+    y = np.array([label_to_binary(l.label) for l in holdout], dtype=int)
     return holdout, y
 
 
 def _rules_p(holdout):
     """Rule-based P(no-go) on the holdout — same path production uses."""
+    from app.lib.scoring import label_to_binary  # noqa: F401 — re-imported for clarity
+
     p = []
     for l in holdout:
-        ts = datetime.combine(l.date, datetime.min.time())
+        # Audit F-B2-11: replay at the same hour training uses (noon UTC).
+        ts = datetime(l.date.year, l.date.month, l.date.day, 12, 0, 0, tzinfo=timezone.utc)
         feat_df = build_features(l.site_key, ts)
         feat_dict = features_dict_from_row(feat_df.values[0])
         p.append(p_bad_from_rules(feat_dict))
@@ -205,6 +216,21 @@ def main():
 
     # Persist
     cal.save(CALIBRATOR_PATH)
+
+    # Audit F-B2-07: best-effort reload of the running API's calibrator.
+    import os
+
+    import requests
+
+    base = os.getenv("SEASID_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    headers = {}
+    token = os.getenv("SEASID_RELOAD_TOKEN", "").strip()
+    if token:
+        headers["X-Reload-Token"] = token
+    try:
+        requests.post(f"{base}/api/v1/admin/model/reload", headers=headers, timeout=10)
+    except requests.RequestException:
+        pass  # API not running — artifacts are on disk for next start
 
     report = {
         "captured_at": datetime.now().isoformat(),

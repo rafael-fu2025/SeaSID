@@ -5,8 +5,16 @@ services:
       target: production
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 2g
     environment:
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Audit F-C2-09: unified with the code default (MiniMax-M1).
+      - OPENAI_MODEL=${OPENAI_MODEL:-MiniMax-M1}
       - SEASID_AUTH_ENABLED=${SEASID_AUTH_ENABLED:-true}
       - SEASID_AUTH_SECRET=${SEASID_AUTH_SECRET}
       - SEASID_ACCESS_TOKEN_MINUTES=${SEASID_ACCESS_TOKEN_MINUTES:-60}

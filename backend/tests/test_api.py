@@ -243,8 +243,8 @@ class TestExperimentsStreamEndpoint:
 
         def _fake_suite(
             X_flat, y, X_seq, y_arr,
-            label_dates=None, label_site_keys=None,
-            progress_callback=None, metric_callback=None,
+            label_dates=None, label_site_keys=None, label_sources=None,
+            progress_callback=None, metric_callback=None, cancel_event=None,
         ):
             # Emit one progress line + four metric events — exactly what
             # the real suite produces in production.
