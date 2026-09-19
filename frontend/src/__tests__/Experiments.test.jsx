@@ -10,6 +10,10 @@ vi.mock('@/api', () => ({
     getExperimentResults: vi.fn(),
     runExperiments: vi.fn(),
     runExperimentsStream: vi.fn(),
+    // Audit F-F6-01: Cancel now pings the server-side cancel endpoint.
+    // Without this mock the click handler threw an unhandled TypeError
+    // (CI failure: "api.cancelExperiments is not a function").
+    cancelExperiments: vi.fn().mockResolvedValue({ ok: true, was_running: true }),
   },
 }));
 

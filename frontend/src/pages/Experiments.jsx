@@ -185,7 +185,9 @@ export default function Experiments() {
       closeStreamRef.current();
       closeStreamRef.current = null;
     }
-    api.cancelExperiments().catch(() => {
+    // Promise.resolve(...) keeps this safe when the API client is mocked
+    // (clearAllMocks wipes mockResolvedValue → undefined return).
+    Promise.resolve(api.cancelExperiments?.()).catch(() => {
       /* even if the ping fails, detach the stream */
     });
     setRunning(false);
