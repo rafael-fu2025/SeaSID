@@ -36,6 +36,14 @@ def test_fallback_when_batch_predict_crashes(monkeypatch):
     def boom(*args, **kwargs):
         raise ValueError("simulated model crash (e.g. stale bundle)")
 
+    # Hermetic on CI (audit F-C1): runners have no trained artifacts, so
+    # load_best would honestly return None (rules tier) and never reach the
+    # LSTM path this test exercises. Inject a qualifying lstm bundle instead.
+    monkeypatch.setattr(
+        services, "load_best",
+        lambda: {"model_type": "lstm", "config": {"seq_len": 24},
+                 "feature_columns": ["f"] * 14, "n_samples": 800},
+    )
     # Phase 4: the batched path is what services calls first. Stub it in
     # the module where it lives, not the services re-export.
     monkeypatch.setattr(model_lstm, "predict_proba_lstm_batch", boom)
@@ -86,9 +94,17 @@ def test_failed_lstm_is_replaced_by_labeled_rules(monkeypatch):
     from app.api import services
     from app.lib import model_lstm
 
+    _reset_model_cache()
+
     def boom(*args, **kwargs):
         raise ValueError("simulated model crash")
 
+    # Hermetic on CI (see the sibling test above).
+    monkeypatch.setattr(
+        services, "load_best",
+        lambda: {"model_type": "lstm", "config": {"seq_len": 24},
+                 "feature_columns": ["f"] * 14, "n_samples": 800},
+    )
     monkeypatch.setattr(model_lstm, "predict_proba_lstm_batch", boom)
     monkeypatch.setattr(services, "predict", boom)
     services.invalidate_forecast_cache(None)
