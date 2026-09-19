@@ -25,13 +25,18 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
 
-from app.lib.features import build_sequence
+from app.lib.features import (
+    build_features,
+    build_sequences_for_window,
+)
+from app.lib.scoring import features_dict_from_row, p_bad_from_rules
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,10 @@ _selected_tier: str | None = None  # "lstm" | "xgboost" | "rule_based"
 _selection_reason: str | None = None
 _lstm_rejection_reason: str | None = None
 _xgb_rejection_reason: str | None = None
+# Tier 3 (rules) is cached for a short TTL so a deployment without a
+# qualified bundle doesn't re-scan model files on every request.
+_RULES_CACHE_TTL_SECONDS = 60
+_cached_none_at: float | None = None
 
 
 def _read_metrics_file(path: Path) -> dict:
@@ -87,44 +96,34 @@ def _bundle_qualifies(bundle: dict, min_samples: int, min_auc: float, metrics: d
     return True, f"n_samples={n_samples}, auc={float(auc):.3f}"
 
 
-def load_best() -> dict:
+def load_best() -> dict | None:
     """
-    Phase 3: tiered model selection.
+    Phase 3: tiered model selection — LIVE (audit F-B2-01).
 
-    Returns the persisted LSTM bundle. Missing LSTM artifacts fail loudly;
-    production inference never switches to XGBoost or rule-based scoring.
+    Tier 1 LSTM (n_samples >= 500, honest AUC >= 0.65) → Tier 2 XGBoost
+    (n_samples >= 500, out-of-fold AUC >= 0.60) → Tier 3 rule-based (None).
+    A rules-tier result is cached for _RULES_CACHE_TTL_SECONDS to avoid
+    re-scanning model files on every request; ``reload()`` clears it.
     """
     global _cached_bundle, _selected_tier, _selection_reason
-    global _lstm_rejection_reason, _xgb_rejection_reason
+    global _lstm_rejection_reason, _xgb_rejection_reason, _cached_none_at
 
     # Cache: skip only when a *bundle* (not None) was previously selected.
-    # When the previous result was None (rules fallback), re-evaluate so
-    # the per-tier rejection reasons are refreshed — important for the
-    # Settings panel to show fresh diagnostics after ``reload()``.
     if _cached_bundle is not None:
         return _cached_bundle
+
+    # Tier 3 (rules) result is cached briefly — a deployment without a
+    # qualified bundle would otherwise re-scan model files per request.
+    if _cached_none_at is not None and (time.time() - _cached_none_at) < _RULES_CACHE_TTL_SECONDS:
+        _selected_tier = "rule_based"
+        _selection_reason = "no ML bundle qualified its tier gate (cached)"
+        return None
 
     # Lazy imports avoid a circular import at module load.
     from app.lib.model_lstm import load_lstm
     from app.lib.model_xgb import load_xgb
-    # Production forecasts use LSTM exclusively. A missing artifact is a
-    # deployment error, not a reason to silently switch prediction models.
-    lstm_bundle = load_lstm(LSTM_MODEL_PATH)
-    if lstm_bundle is None:
-        _selected_tier = "lstm"
-        _selection_reason = "production LSTM bundle is missing"
-        _lstm_rejection_reason = f"lstm: no bundle at {LSTM_MODEL_PATH}"
-        raise RuntimeError(f"Production LSTM bundle not found: {LSTM_MODEL_PATH}")
 
-    _cached_bundle = lstm_bundle
-    _selected_tier = "lstm"
-    _selection_reason = "production model configured as LSTM"
-    _lstm_rejection_reason = None
-    _xgb_rejection_reason = "xgboost: disabled for production inference"
-    logger.info("Production model selected: LSTM")
-    return _cached_bundle
-
-    # ── Tier 1: LSTM ────────────────────────────────────────────────
+    # ── Tier 1: LSTM (audit F-B2-01: gates are live again) ─────────
     lstm_bundle = load_lstm(LSTM_MODEL_PATH)
     lstm_metrics = _read_metrics_file(DATA_DIR / "lstm_metrics.json")
     if lstm_bundle is not None:
@@ -135,8 +134,10 @@ def load_best() -> dict:
             _cached_bundle = lstm_bundle
             _selected_tier = "lstm"
             _selection_reason = reason
-            logger.info("Tier 1 selected: LSTM (%s)", reason)
             _lstm_rejection_reason = None
+            _xgb_rejection_reason = "xgboost: not needed — LSTM qualified"
+            _cached_none_at = None
+            logger.info("Tier 1 selected: LSTM (%s)", reason)
             return _cached_bundle
         logger.info("Tier 1 (LSTM) rejected: %s", reason)
         _lstm_rejection_reason = f"lstm: {reason}"
@@ -148,27 +149,18 @@ def load_best() -> dict:
     xgb_bundle = load_xgb(XGB_MODEL_PATH)
     xgb_metrics = _read_metrics_file(XGB_METRICS_PATH)
     if xgb_bundle is not None:
-        # XGBoost store n_samples on the bundle root, but older pickles
-        # (pre-Phase 3) won't have it — fall back to "unknown".
+        # Audit F-B2-04: auc_roc is out-of-fold (train_xgb), so gating on
+        # it is meaningful. Older metrics files without it cannot qualify.
         n_samples = xgb_bundle.get("n_samples", 0) or 0
-        # Try AUC first; fall back to cv_f1; if neither, the metrics file
-        # is missing or stale and we can't qualify the bundle.
-        auc = xgb_metrics.get("auc_roc") or xgb_metrics.get("cv_accuracy") or 0.0
-        qualifies = (
-            n_samples >= LSTM_MIN_SAMPLES  # need *enough* data even for XGB
-            and auc is not None
-            and float(auc) >= XGB_MIN_AUC
-        )
-        reason = (
-            f"n_samples={n_samples}, auc/cv_accuracy={float(auc):.3f} "
-            f"(min_auc={XGB_MIN_AUC})"
-        )
-        if qualifies:
+        auc = xgb_metrics.get("auc_roc") or 0.0
+        reason = f"n_samples={n_samples}, auc={float(auc):.3f} (min_auc={XGB_MIN_AUC})"
+        if n_samples >= LSTM_MIN_SAMPLES and float(auc) >= XGB_MIN_AUC:
             _cached_bundle = xgb_bundle
             _selected_tier = "xgboost"
             _selection_reason = reason
-            logger.info("Tier 2 selected: XGBoost (%s)", reason)
             _xgb_rejection_reason = None
+            _cached_none_at = None
+            logger.info("Tier 2 selected: XGBoost (%s)", reason)
             return _cached_bundle
         logger.info("Tier 2 (XGBoost) rejected: %s", reason)
         _xgb_rejection_reason = f"xgboost: {reason}"
@@ -181,21 +173,20 @@ def load_best() -> dict:
     _selected_tier = "rule_based"
     _selection_reason = "no ML bundle qualified its tier gate"
     logger.warning("Tier 3 selected: rule-based scoring (%s)", _selection_reason)
+    _cached_none_at = time.time()
     return None
-    # _lstm_rejection_reason and _xgb_rejection_reason are set by the
-    # Tier 1 / Tier 2 branches above — they expose the per-tier diagnostic
-    # via tier_diagnostics().
 
 
 def reload() -> dict | None:
     """Force-reload the model (e.g., after retraining)."""
     global _cached_bundle, _selected_tier, _selection_reason
-    global _lstm_rejection_reason, _xgb_rejection_reason
+    global _lstm_rejection_reason, _xgb_rejection_reason, _cached_none_at
     _cached_bundle = None
     _selected_tier = None
     _selection_reason = None
     _lstm_rejection_reason = None
     _xgb_rejection_reason = None
+    _cached_none_at = None
     return load_best()
 
 
@@ -233,8 +224,10 @@ def tier_diagnostics() -> dict[str, str]:
 def predict(bundle: dict | None, site_key: str, target_ts: datetime) -> float:
     """
     Return P(no-go) for a given site and time.
-    Dispatches to LSTM or XGBoost based on bundle type.
-    Falls back to rule-based scoring if bundle is None.
+
+    Tier 3 (bundle is None) serves the rule-based scorer — audit F-B2-01.
+    The LSTM path uses the batched sequence builder for its single window
+    (audit F-B2-06: the old per-hour build_sequence made 96 DB queries).
 
     Phase 7: applies the persisted calibrator (``calibrator.pkl``) to the
     raw ML probability before returning it. If the calibrator is missing
@@ -242,14 +235,16 @@ def predict(bundle: dict | None, site_key: str, target_ts: datetime) -> float:
     unchanged.
     """
     if bundle is None:
-        raise RuntimeError("LSTM model is required for production prediction")
+        feat_df = build_features(site_key, target_ts)
+        return float(p_bad_from_rules(features_dict_from_row(feat_df.values[0])))
 
     model_type = get_model_type(bundle)
 
     if model_type == "lstm":
         from app.lib.model_lstm import predict_proba_lstm
-        seq = build_sequence(site_key, target_ts, window_hours=bundle.get("config", {}).get("seq_len", 24))
-        proba = predict_proba_lstm(bundle, seq)
+        seq_len = bundle.get("config", {}).get("seq_len", 24)
+        seq = build_sequences_for_window(site_key, [target_ts], window_hours=seq_len)
+        proba = predict_proba_lstm(bundle, seq[0])
         raw = float(proba[0])
     else:
         raise RuntimeError(f"Unsupported production model type: {model_type}")

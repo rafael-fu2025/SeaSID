@@ -40,6 +40,9 @@ def main():
     X_rows = []
     y_vals = []
     X_seqs = []
+    label_dates = []
+    label_site_keys = []
+    label_sources = []
     skipped = 0
 
     for lbl in labels:
@@ -55,6 +58,9 @@ def main():
             X_seqs.append(seq)
 
             y_vals.append(label_to_binary(lbl.label))
+            label_dates.append(lbl.date)
+            label_site_keys.append(lbl.site_key)
+            label_sources.append(lbl.source)
         except Exception:
             skipped += 1
 
@@ -69,7 +75,12 @@ def main():
     print(f"Dataset ready: {len(X_flat)} samples")
 
     # Run experiments
-    results = run_full_experiment_suite(X_flat, y, X_seq, y_arr)
+    results = run_full_experiment_suite(
+        X_flat, y, X_seq, y_arr,
+        label_dates=label_dates,
+        label_site_keys=label_site_keys,
+        label_sources=label_sources,
+    )
 
     # Print summary
     print("\n" + "=" * 60)

@@ -45,9 +45,17 @@ engine = create_engine(
 
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragma(dbapi_conn, connection_record):
-    """Enable WAL mode for better concurrent read/write performance."""
+    """Apply the standard SQLite concurrency pragmas (audit F-B1-04).
+
+    WAL allows one writer + many readers, but writers still serialize and
+    short readers can lock — without ``busy_timeout`` a concurrent write
+    fails immediately with "database is locked" under FastAPI's threadpool.
+    """
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
 
@@ -82,6 +90,9 @@ class WeatherObs(Base):
     wave_max_m = Column(Float, default=0.0)
     sea_temp_c = Column(Float, nullable=True)
     source = Column(String(32), nullable=True)  # e.g. "open_meteo"
+    # Audit F-B1-17: distinguishes "observed at hour X" from "landed in the
+    # DB much later" so bad backfills are auditable and purgable.
+    ingested_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("site_key", "ts", name="uq_weather_obs_site_ts"),
@@ -108,6 +119,7 @@ class MarineObs(Base):
     current_speed_ms = Column(Float, nullable=True)
     current_direction_deg = Column(Float, nullable=True)
     source = Column(String(32), nullable=True)
+    ingested_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("site_key", "ts", name="uq_marine_obs_site_ts"),
@@ -133,6 +145,7 @@ class AirQualityObs(Base):
     distance_km = Column(Float, nullable=True)
     quality = Column(String(16), nullable=True)  # local / regional / distant / very_distant
     source = Column(String(32), nullable=True)
+    ingested_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("site_key", "ts", name="uq_air_quality_obs_site_ts"),
@@ -147,6 +160,8 @@ class TideObs(Base):
     site_key = Column(String(50), nullable=False, index=True)
     ts = Column(DateTime(timezone=True), nullable=False, index=True)
     height_m = Column(Float, default=0.0)
+    source = Column(String(32), nullable=True)  # e.g. "worldtides"
+    ingested_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("site_key", "ts", name="uq_tide_obs_site_ts"),
@@ -197,6 +212,9 @@ class OperatorVerification(Base):
     no_go_reason = Column(String(20), nullable=True)
     confidence = Column(String(8), nullable=True)
     actor_id = Column(String(100), nullable=True, index=True)
+    # Audit F-F3-02: shop/team display field (the old free-text "operator"
+    # input was ignored — the authenticated principal is the observer).
+    shop_name = Column(String(100), nullable=True)
 
     # One verification per (site, date, operator). NULL operators are treated
     # as distinct by both SQLite and PostgreSQL, so anonymous submissions do
@@ -314,6 +332,18 @@ class ProviderConfig(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class AuditEvent(Base):
+    """Structured audit trail for sensitive actions (audit F-B3-13)."""
+
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ts = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    actor = Column(String(100), nullable=True)
+    action = Column(String(60), nullable=False)
+    detail_json = Column(Text, nullable=True)
 
 
 # ── Initialization ─────────────────────────────────────────────────────────

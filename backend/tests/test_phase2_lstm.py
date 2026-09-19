@@ -153,7 +153,16 @@ class TestPosWeightClassBalancing:
 
         config = LSTMTrainConfig(max_epochs=3, hidden_size=8)
         result = train_lstm(X, y, config)
-        assert abs(result.metrics["pos_weight"] - 1.0) < 0.01
+        # Audit F-B2-03: pos_weight is computed from the TRAIN split only.
+        # Replicate the deterministic split to derive the expected weight —
+        # the 85% random train subset of a balanced set is only roughly
+        # balanced, so the weight is near but not exactly 1.0.
+        indices = np.random.RandomState(42).permutation(n)
+        train_idx = indices[: max(1, int(n * 0.85))]
+        n_pos = float(y[train_idx].sum())
+        expected = (len(train_idx) - n_pos) / n_pos
+        assert abs(result.metrics["pos_weight"] - expected) < 0.01
+        assert abs(result.metrics["pos_weight"] - 1.0) < 0.35
 
 
 class TestTimeAwareSplit:

@@ -228,7 +228,8 @@ def get_active_users():
     try:
         # Lazy table creation so this also runs before the app starts FastAPI.
         _db.Base.metadata.create_all(bind=_db.engine)
-        rows = _db.SessionLocal().query(_db.User).all()
+        with _db.SessionLocal() as session:
+            rows = session.query(_db.User).all()
     except Exception:
         return configured_users()
     if rows:
@@ -294,6 +295,54 @@ def verify_password(password: str, expected: str | None, expected_hash: str | No
     if expected is None:
         return False
     return hmac.compare_digest(password, str(expected))
+
+
+# ── Login lockout (audit F-B3-04) ──────────────────────────────────────────
+# In-process failure tracking: (username, ip) → (count, first_failure_ts).
+# Suitable for the single-worker deploys this project targets; multi-worker
+# deployments should move this to a shared store. Disable via
+# SEASID_LOGIN_LOCKOUT_ENABLED=0 (tests).
+LOGIN_MAX_FAILURES = 5
+LOGIN_LOCKOUT_MINUTES = 15
+_login_failures: dict[tuple[str, str], tuple[int, float]] = {}
+
+
+def _lockout_enabled() -> bool:
+    return os.getenv("SEASID_LOGIN_LOCKOUT_ENABLED", "1").strip().lower() \
+        not in {"0", "false", "no", "off"}
+
+
+def register_failure(username: str, client_ip: str) -> None:
+    """Record one failed login attempt for (username, ip)."""
+    if not _lockout_enabled():
+        return
+    import time as _time
+
+    key = ((username or "").lower(), client_ip or "unknown")
+    count, first_ts = _login_failures.get(key, (0, _time.monotonic()))
+    _login_failures[key] = (count + 1, first_ts)
+
+
+def clear_failures(username: str, client_ip: str) -> None:
+    _login_failures.pop(((username or "").lower(), client_ip or "unknown"), None)
+
+
+def is_locked_out(username: str, client_ip: str) -> bool:
+    """True when this (username, ip) has ≥ LOGIN_MAX_FAILURES recent failures."""
+    if not _lockout_enabled():
+        return False
+    import time as _time
+
+    key = ((username or "").lower(), client_ip or "unknown")
+    entry = _login_failures.get(key)
+    if entry is None:
+        return False
+    count, first_ts = entry
+    if _time.monotonic() - first_ts > LOGIN_LOCKOUT_MINUTES * 60:
+        # Window expired — reset.
+        _login_failures.pop(key, None)
+        return False
+    return count >= LOGIN_MAX_FAILURES
 
 
 def authenticate_user(username: str, password: str) -> Principal | None:
@@ -372,6 +421,30 @@ def get_current_principal(
         )
     if not subject or not username or role not in VALID_ROLES:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+    # Audit F-B4-05: JWT claims alone authorize for the whole token TTL —
+    # a user disabled or demoted after login would keep working. Re-check
+    # the DB (single indexed query); fall back to claims only if the store
+    # is temporarily unavailable.
+    try:
+        from app.lib import user_store as _us
+        row = _us.get_user_by_subject(subject)
+        if row is not None:
+            if not row.enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account is disabled",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            role = row.role
+            site_scope = tuple(row.site_keys)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning(
+            "User store unavailable for token re-check of %s — using claims", subject,
+        )
+
     return Principal(subject, username, role, site_scope)
 
 

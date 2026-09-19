@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -95,10 +95,19 @@ class StormGlassMarineProvider(MarineProvider):
             logger.warning("No enabled Stormglass database key — returning empty marine data")
             return []
 
+        # Audit F-B6-02: the API expects an explicit window (at least one of
+        # start/end); without one it returns only the near future, so the
+        # marine lookback was never populated. One request covers the whole
+        # window — this is the designed usage on the 50 req/day free tier.
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=max(1, int(hours)))
+
         params = {
             "lat": lat,
             "lng": lon,  # Storm Glass uses `lng`, not `lon` (verified via 422 error)
             "params": ",".join(REQUESTED_PARAMS),
+            "start": start.isoformat().replace("+00:00", "Z"),
+            "end": end.isoformat().replace("+00:00", "Z"),
             # Hourly granularity, no minutely. Default is 1h step.
         }
 

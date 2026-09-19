@@ -91,27 +91,24 @@ def train_xgb(X: pd.DataFrame, y: pd.Series) -> XGBTrainingResult:
             metrics["cv_f1"] = None
 
         # Phase 3: AUC-ROC drives the tier gate (see model.py::load_best).
-        # When the dataset is too small or single-class, the AUC can be
-        # undefined — log None instead of raising.
+        # Audit F-B2-04: the AUC is computed OUT-OF-FOLD via cross_val_predict
+        # — the previous implementation fit on all rows and scored the same
+        # rows, persisting a memorized (in-sample) score.
         if len(np.unique(y)) > 1:
             try:
                 from sklearn.metrics import roc_auc_score
-                # Final fit on all data — used both for AUC reporting and
-                # for serialisation. CV above fitted internal scratch
-                # estimators that we discard; this is the production model.
-                clf.fit(X, y)
-                train_proba = clf.predict_proba(X)[:, 1]
-                metrics["auc_roc"] = float(roc_auc_score(y, train_proba))
+                from sklearn.model_selection import cross_val_predict
+
+                oof_proba = cross_val_predict(
+                    _build_classifier(), X, y, cv=cv, method="predict_proba",
+                )[:, 1]
+                metrics["auc_roc"] = float(roc_auc_score(y, oof_proba))
             except Exception as exc:
                 logger.warning("AUC-ROC failed: %s", exc)
                 metrics["auc_roc"] = None
-                # Even if AUC fails we still need to fit the model so
-                # serialisation works.
-                clf.fit(X, y)
-        else:
-            metrics["auc_roc"] = None
-            clf.fit(X, y)
 
+        # Final fit on all data — the production model.
+        clf.fit(X, y)
         metrics["mode"] = "cv"
 
     metrics["n_samples"] = len(X)

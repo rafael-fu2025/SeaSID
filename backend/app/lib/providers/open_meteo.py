@@ -43,13 +43,15 @@ class OpenMeteoWeatherProvider(WeatherProvider):
     )
 
     def fetch_hourly(self, lat: float, lon: float, hours: int = 48) -> list[dict]:
-        # Cover as much of the requested window as possible in one call.
-        # Open-Meteo's forecast endpoint supports up to ~16 days (384h) total
-        # when combining past_hours + forecast_hours, so 7 days (168h) is safe.
-        # Cap past_hours at 168 (7d) since the archive endpoint is the right
-        # tool for anything older.
-        past_hours = min(int(hours), 168)
-        forecast_hours = max(1, int(hours) - past_hours)
+        # `hours` is the forward-looking window (see ingest_site's docstring):
+        # we ask for the same span in the past so the LSTM 24h lookback is
+        # always populated. Open-Meteo caps the combined window at 384h, so
+        # past is capped at 168h and forecast at 96h (168+96 = 264 < 384).
+        # Audit F-B6-01: the previous formula produced forecast_hours=1 for
+        # any hours<=168, leaving forward features computed on empty windows.
+        hours = max(1, int(hours))
+        past_hours = min(hours, 168)
+        forecast_hours = max(hours, 48)
         rows = fetch_forecast(
             lat, lon,
             past_hours=past_hours,
@@ -89,8 +91,10 @@ class OpenMeteoMarineProvider(MarineProvider):
     )
 
     def fetch_hourly(self, lat: float, lon: float, hours: int = 48) -> list[dict]:
-        past_hours = min(int(hours), 168)
-        forecast_hours = max(1, int(hours) - past_hours)
+        # Same window semantics as the weather provider above — audit F-B6-01.
+        hours = max(1, int(hours))
+        past_hours = min(hours, 168)
+        forecast_hours = max(hours, 48)
         rows = fetch_forecast(
             lat, lon,
             past_hours=past_hours,

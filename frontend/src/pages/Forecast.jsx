@@ -3,6 +3,7 @@ import {
   Activity, AlertTriangle, ChevronDown, Clock3, Database, RefreshCw, Sparkles,
 } from 'lucide-react';
 import { api } from '@/api';
+import { getInitialSiteKey } from '@/lib/sitePrefs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,7 +32,7 @@ const fmt = (value, unit) => {
 };
 
 export default function Forecast() {
-  const [selectedSite, setSelectedSite] = useState('dauin_muck');
+  const [selectedSite, setSelectedSite] = useState(getInitialSiteKey);
   const [briefing, setBriefing] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [windowHours, setWindowHours] = useState(48);
@@ -152,6 +153,24 @@ export default function Forecast() {
         </Card>
       )}
 
+      {/* Degraded-data warning (audit F-F2-02): never show fallback hours
+          as if they were nominal model output. */}
+      {forecast && (forecast.degraded?.length > 0 || forecast.fallback_hours > 0) && (
+        <Card className="border-warning/30 bg-warning/5" data-testid="forecast-degraded">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertTriangle className="mt-0.5 size-4 text-warning" />
+            <div className="text-sm">
+              <p className="font-medium text-warning">Forecast quality is degraded</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {forecast.fallback_hours > 0 &&
+                  `${forecast.fallback_hours} of ${forecast.hours?.length ?? 0} hours served by the rule-based fallback (model unavailable). `}
+                {forecast.degraded?.length > 0 && forecast.degraded.join(' · ')}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {loading && !briefing ? (
         <div className="flex flex-col gap-6"><SkeletonChart /><SkeletonChart /></div>
       ) : (
@@ -197,23 +216,23 @@ export default function Forecast() {
             </Card>
           </div>
 
-          {hours.length > 0 && (
-            <>
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-foreground">Forecast timeline</h2>
-                  <p className="text-xs text-muted-foreground">Select a range or expand any hour.</p>
-                </div>
-                <WindowToggle value={windowHours} onChange={setWindowHours} />
-              </div>
-              <PBadChart
-                hours={hours}
-                optimalIso={optimal?.ts}
-                label={`${windowHours}-hour probability of no-go`}
-              />
-              <ForecastTimeline hours={hours} optimalIso={optimal?.ts} />
-            </>
-          )}
+      {hours.length > 0 && (
+        <>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Forecast timeline</h2>
+              <p className="text-xs text-muted-foreground">Select a range or expand any hour.</p>
+            </div>
+            <WindowToggle value={windowHours} onChange={setWindowHours} />
+          </div>
+          <PBadChart
+            hours={hours}
+            optimalIso={optimal?.ts}
+            label={`${windowHours}-hour probability of no-go`}
+          />
+          <ForecastTimeline hours={hours} optimalIso={optimal?.ts} />
+        </>
+      )}
         </>
       )}
     </div>

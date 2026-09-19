@@ -18,6 +18,10 @@ import pytest
 # Production defaults remain fail-closed because authentication is enabled
 # unless this explicit test setting is present.
 os.environ.setdefault("SEASID_AUTH_ENABLED", "false")
+# Rate limiting is exercised by dedicated tests; the main suite logs in many
+# times from one IP and would trip the limiter (audit F-B3-04).
+os.environ.setdefault("SEASID_RATELIMIT_ENABLED", "false")
+os.environ.setdefault("SEASID_LOGIN_LOCKOUT_ENABLED", "false")
 
 # Ensure backend root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -94,7 +98,11 @@ def _setup_test_db(tmp_path, monkeypatch):
     @event.listens_for(test_engine, "connect")
     def _set_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
+        # Keep in sync with app.lib.db._set_sqlite_pragma (audit F-B1-04).
         cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
     Base.metadata.create_all(bind=test_engine)
@@ -135,6 +143,13 @@ def db_session(_setup_test_db):
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture
+def test_engine(_setup_test_db):
+    """Provide the raw test engine (e.g. for PRAGMA assertions)."""
+    test_engine, _ = _setup_test_db
+    return test_engine
 
 
 @pytest.fixture

@@ -64,9 +64,20 @@ class BaseScraper(ABC):
 
     # ── Registry helpers (subclasses inherit these automatically) ──
     def to_label_rows(self, site_key: str, rows: list[dict]) -> list[db_mod.NoDiveLabel]:
-        """Wrap raw dicts into NoDiveLabel ORM rows."""
+        """Wrap raw dicts into NoDiveLabel ORM rows.
+
+        Audit F-B6-03: rows missing ``label`` are dropped (with a warning)
+        rather than silently becoming a "dive" (safe) training row. run_all
+        surfaces the drop count via ``ScraperResult.errors``.
+        """
         out = []
         for r in rows:
+            if not r.get("label"):
+                logger.warning(
+                    "scraper %s: dropping row for %s — missing 'label'",
+                    self.name, r.get("date"),
+                )
+                continue
             d = r["date"]
             if isinstance(d, str):
                 from datetime import date as _date
@@ -147,6 +158,11 @@ def run_all(
             # SELECT per row is O(N) queries per scraper run, which gets
             # slow when viz_app feeds us 10k rows.
             label_rows = scraper.to_label_rows(site_key, rows)
+            dropped = len(rows) - len(label_rows)
+            if dropped:
+                result.errors.append(
+                    f"{dropped} row(s) dropped — missing 'label'"
+                )
             session = db_mod.SessionLocal()
             try:
                 # Upsert + return inserted rowids so we can count.

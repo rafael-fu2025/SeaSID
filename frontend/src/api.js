@@ -35,7 +35,7 @@ function authHeaders() {
  * `signal` lets the caller abort via `AbortController.abort()`; the
  * fetch promise rejects and the generator unwinds cleanly.
  */
-export async function* streamChat({ message, conversationId, siteKey, images, documents, signal }) {
+export async function* streamChat({ message, conversationId, siteKey, images, documents, disabledTools, signal }) {
   const res = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -45,6 +45,9 @@ export async function* streamChat({ message, conversationId, siteKey, images, do
       site_key: siteKey,
       images: images ?? [],
       documents: documents ?? [],
+      // Audit F-F4-01: the Settings tool toggles are sent with every
+      // message so disabled tools are genuinely withheld from the LLM.
+      disabled_tools: disabledTools ?? [],
     }),
     signal,
   });
@@ -96,15 +99,31 @@ export async function* streamChat({ message, conversationId, siteKey, images, do
 
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`;
-  const { skipAuth = false, ...fetchOptions } = options;
-  const res = await fetch(url, {
-    ...fetchOptions,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(skipAuth ? {} : authHeaders()),
-      ...fetchOptions.headers,
-    },
-  });
+  const { skipAuth = false, timeoutMs = 20_000, ...fetchOptions } = options;
+  // Audit F-F1-02: every REST call gets a default timeout — a hung backend
+  // (or dead tunnel) previously locked the UI spinner forever. Callers can
+  // pass their own `signal` for cancellation.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const callerSignal = fetchOptions.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  let res;
+  try {
+    res = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(skipAuth ? {} : authHeaders()),
+        ...fetchOptions.headers,
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 401) {
     clearAuthToken();
     window.dispatchEvent(new CustomEvent('seasid:auth-expired'));
@@ -136,8 +155,10 @@ export const api = {
   getAgentTools: () => request('/api/v1/agent/tools'),
 
   // Forecast
-  getForecast: (siteKey, hours = 48) =>
-    request(`/api/v1/forecast?site=${siteKey}&hours=${hours}`),
+  // Audit F-F1-04: the phantom `hours` param was dropped — the backend
+  // route never accepted it and always returns the full 48h payload.
+  getForecast: (siteKey) =>
+    request(`/api/v1/forecast?site=${siteKey}`),
 
   // Labels
   getLabels: (siteKey = 'all', limit = 50) =>
@@ -180,11 +201,14 @@ export const api = {
   // Experiments
   getExperimentResults: () => request('/api/v1/experiments/results'),
   runExperiments: () => request('/api/v1/experiments/run', { method: 'POST' }),
+  // Audit F-F6-01: cancel stops the TRAINING server-side, not just the UI.
+  cancelExperiments: () =>
+    request('/api/v1/experiments/run/cancel', { method: 'POST' }),
   // Streaming variant — opens an SSE connection and invokes the
   // supplied callbacks for every event (`log`, `metric`, `status`,
-  // `done`, `error`). Returns a `close()` function so the UI can abort
-  // mid-run (e.g. on tab navigation).
-  runExperimentsStream: ({ onStatus, onLog, onMetric, onDone, onError, signal } = {}) => {
+  // `done`, `cancelled`, `error`). Returns a `close()` function so the
+  // UI can abort mid-run (e.g. on tab navigation).
+  runExperimentsStream: ({ onStatus, onLog, onMetric, onDone, onError, onCancelled, signal } = {}) => {
     // We POST instead of using EventSource because the browser's
     // built-in EventSource is GET-only, and the experiment suite is a
     // state-changing write (reloads the active model, invalidates the
@@ -248,6 +272,7 @@ export const api = {
                 case 'log':      onLog?.(payload.line || ''); break;
                 case 'metric':   onMetric?.(payload); break;
                 case 'done':     onDone?.(payload); break;
+                case 'cancelled': onCancelled?.(); break;
                 case 'error':    onError?.(payload.message || 'Experiment failed'); break;
                 default: break;
               }

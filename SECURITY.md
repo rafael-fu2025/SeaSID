@@ -26,6 +26,20 @@ It must contain at least 32 characters. When unset, SeaSID creates
 backed up with the database. Losing it makes existing provider keys
 undecryptable.
 
+**Threat model (be explicit about this):** the key file lives next to the
+database by default, so at-rest encryption defends against *database-only*
+exfiltration (e.g. a stray backup or table dump) — not against compromise of
+the whole data directory or volume, which yields both files. `os.chmod(600)`
+is best-effort and is a no-op on Windows hosts. For deployments that matter,
+pass `SEASID_DB_ENCRYPTION_KEY` from a secret manager instead of relying on
+the file, and never publish Docker images built from a checkout whose
+`backend/data/` was populated (`.dockerignore` excludes it, but verify before
+pushing).
+
+Trained model artifacts (`backend/data/*.pt`, `*.pkl`, `calibrator.pkl`) are
+pickles: loading a tampered artifact is code execution. Treat them with the
+same trust as source code.
+
 Never commit `backend/.env`, `backend/data/seasid.key`, database files, access
 tokens, password hashes, or provider credentials. The tracked
 `backend/.env.example` contains placeholders and non-secret configuration only.

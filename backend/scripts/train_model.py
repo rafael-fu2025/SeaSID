@@ -30,7 +30,9 @@ XGB_MODEL_PATH = DATA_DIR / "seasid_xgb.pkl"
 METRICS_PATH = DATA_DIR / "seasid_metrics.json"
 
 
-def _load_training_data() -> tuple[pd.DataFrame, pd.Series, np.ndarray, np.ndarray]:
+def _load_training_data() -> tuple[
+    pd.DataFrame, pd.Series, np.ndarray, np.ndarray, list,
+]:
     """
     Load labels from DB and build feature matrices for both XGBoost and LSTM.
 
@@ -142,6 +144,36 @@ def train_lstm_model(X_seq: np.ndarray, y: np.ndarray, label_dates: list | None 
     return result.metrics
 
 
+def _ping_model_reload() -> None:
+    """Ask a running API to reload its in-memory model (best-effort).
+
+    Audit F-B2-07: train scripts run in their own process; without this
+    ping the API keeps serving its cached bundle until restart.
+    """
+    import os
+
+    import requests
+
+    base = os.getenv("SEASID_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    headers = {}
+    token = os.getenv("SEASID_RELOAD_TOKEN", "").strip()
+    if token:
+        headers["X-Reload-Token"] = token
+    try:
+        res = requests.post(
+            f"{base}/api/v1/admin/model/reload", headers=headers, timeout=10,
+        )
+        if res.ok:
+            print(f"Running API reloaded its model: {res.json()}")
+        else:
+            print(
+                f"Model reload ping skipped (HTTP {res.status_code}) — "
+                "restart the API or set SEASID_RELOAD_TOKEN to pick up new artifacts."
+            )
+    except requests.RequestException:
+        print("API not reachable — model artifacts saved; restart the API to load them.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train SeaSID models")
     parser.add_argument("--lstm-only", action="store_true", help="Train LSTM only")
@@ -165,6 +197,9 @@ def main():
     with open(METRICS_PATH, "w") as f:
         json.dump(all_metrics, f, indent=2)
     print(f"\nCombined metrics saved to {METRICS_PATH}")
+
+    # Audit F-B2-07: close the retrain loop — see _ping_model_reload.
+    _ping_model_reload()
 
     # Summary
     print("\n" + "=" * 50)

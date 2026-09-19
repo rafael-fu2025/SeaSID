@@ -42,7 +42,7 @@ describe('Verify page (form lives in a Dialog)', () => {
     expect(screen.getByTestId('verify-new')).toBeInTheDocument();
     // Form fields are NOT in the DOM yet
     expect(screen.queryByLabelText(/^site$/i)).toBeNull();
-    expect(screen.queryByLabelText(/operator name/i)).toBeNull();
+    expect(screen.queryByLabelText(/shop \/ team/i)).toBeNull();
     expect(screen.queryByLabelText(/^date$/i)).toBeNull();
     expect(screen.queryByLabelText(/actual current/i)).toBeNull();
     expect(screen.queryByLabelText(/actual visibility/i)).toBeNull();
@@ -59,7 +59,7 @@ describe('Verify page (form lives in a Dialog)', () => {
 
     // Form fields appear
     expect(screen.getByLabelText(/^site$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/operator name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/shop \/ team/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^date$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/actual current/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/actual visibility/i)).toBeInTheDocument();

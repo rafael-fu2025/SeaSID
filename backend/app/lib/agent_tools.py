@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 from datetime import datetime, timezone
+from threading import Lock as _ThreadLock
 from typing import Any
 
 from app.lib.sites import get_site, get_all_sites, site_keys
@@ -645,14 +647,28 @@ TOOL_HANDLERS = {
 # subprocess. The function signatures match the upstream tool list so the
 # schemas the model sees stay valid across MCP upgrades.
 #
+# Audit F-B5-01 (OWASP LLM06 Excessive Agency): ONLY the allowlisted MCP
+# tools are exposed to the LLM — an upstream package update that adds
+# file-writing or shell tools must never silently gain tool access. The
+# allowlist is env-configurable; everything else is logged and skipped.
+#
 # We wrap the merge in a thread lock so a burst of agent calls doesn't
 # each boot the subprocess.
-
-from threading import Lock as _ThreadLock  # noqa: E402
 
 _mcp_merge_lock = _ThreadLock()
 _mcp_tools_cache: list[dict] | None = None
 _mcp_tool_names: set[str] = set()
+_skipped_mcp_tools: list[str] = []
+
+
+def _mcp_tool_allowlist() -> set[str]:
+    raw = _os.getenv("SEASID_MCP_TOOL_ALLOWLIST", "web_search,web_browse").strip()
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def skipped_mcp_tools() -> list[str]:
+    """Tools discovered on the MCP but blocked by the allowlist (diagnostics)."""
+    return list(_skipped_mcp_tools)
 
 
 def _static_tool_definitions() -> list[dict]:
@@ -660,14 +676,23 @@ def _static_tool_definitions() -> list[dict]:
     return list(TOOL_DEFINITIONS)
 
 
-async def get_active_tool_definitions() -> tuple[list[dict], dict[str, Any]]:
+async def get_active_tool_definitions(
+    disabled: set[str] | None = None,
+) -> tuple[list[dict], dict[str, Any]]:
     """Return ``(tool_definitions, handlers)`` including the live MCP tools.
 
+    ``disabled`` names tools the operator switched off (Settings → Agent);
+    they are removed from both the definitions and the handlers so the model
+    can neither see nor call them.
+
     ``handlers`` maps tool name -> async callable. Built-in handlers stay
-    synchronous; the merge wraps them in coroutine shims so the agent
-    loop can ``await`` every handler uniformly.
+    synchronous; the merge wraps them in coroutine shims so the agent loop
+    can ``await`` every handler uniformly.
     """
     from app.lib import agent_mcp
+
+    disabled = disabled or set()
+    _skipped_mcp_tools.clear()
 
     # Snapshot the static set up front — never mutate TOOL_DEFINITIONS.
     definitions = _static_tool_definitions()
@@ -687,6 +712,16 @@ async def get_active_tool_definitions() -> tuple[list[dict], dict[str, Any]]:
         ),
     }
 
+    # Operator-disabled tools are removed entirely (audit F-F4-01: the
+    # Settings switches were a placebo until this existed).
+    if disabled:
+        definitions = [
+            d for d in definitions if d["function"]["name"] not in disabled
+        ]
+        handlers = {
+            name: h for name, h in handlers.items() if name not in disabled
+        }
+
     mcp_tools: list = []
     try:
         mcp_tools = await agent_mcp.get_mcp_tools()
@@ -694,9 +729,17 @@ async def get_active_tool_definitions() -> tuple[list[dict], dict[str, Any]]:
         logger.debug("MCP tool discovery skipped: %s", exc)
         mcp_tools = []
 
+    allowlist = _mcp_tool_allowlist()
     for tool in mcp_tools:
         if not tool.name or tool.name in handlers:
             # Don't let an MCP tool shadow a built-in; first writer wins.
+            continue
+        if tool.name not in allowlist:
+            _skipped_mcp_tools.append(tool.name)
+            logger.info(
+                "MCP tool %r blocked by SEASID_MCP_TOOL_ALLOWLIST — not exposed to the LLM",
+                tool.name,
+            )
             continue
         definitions.append({
             "type": "function",

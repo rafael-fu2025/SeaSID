@@ -58,11 +58,16 @@ const CONFIDENCE_LEVELS = [
   { value: 'high', label: 'High — eyewitness' },
 ];
 
-const today = () => new Date().toISOString().split('T')[0];
+// Local calendar date (audit F-F3-06): toISOString() used the UTC date,
+// pre-filling "yesterday" for operators submitting late in the local day.
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 const EMPTY_FORM = () => ({
   site_key: 'dauin_muck',
-  operator: '',
+  shop_name: '',
   date: today(),
   verdict: 'dive',
   actual_viz_m: '',
@@ -226,14 +231,17 @@ function NewObservationDialog({ open, onOpenChange, sites, onSubmitted }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="verify-operator" className="text-xs uppercase tracking-wider text-muted-foreground">
-                Operator name <span className="normal-case text-muted-foreground/60">(optional)</span>
+                Shop / team <span className="normal-case text-muted-foreground/60">(optional, notes only)</span>
               </Label>
               <Input
                 id="verify-operator"
-                value={form.operator}
-                onChange={(e) => set('operator', e.target.value)}
+                value={form.shop_name}
+                onChange={(e) => set('shop_name', e.target.value)}
                 placeholder="e.g. Sea Explorers Dauin"
               />
+              <p className="text-[11px] text-muted-foreground">
+                Recorded as a note. The signed-in account is always recorded as the observer.
+              </p>
             </div>
           </div>
 

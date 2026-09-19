@@ -300,20 +300,20 @@ Tool responses render through `MarkdownResponse` which strips emoji pictographs 
 ## Running Tests
 
 ```bash
-# Backend — 66 tests across 8 files
+# Backend — 258 tests across 24 files
 cd backend
 .venv/Scripts/python -m pytest tests/ -v
 
-# Frontend — 81 tests across 20 files
+# Frontend — 199 tests across 30 files
 cd frontend
 npm test
 ```
 
 | Layer           | Files        | Tests         |
 | --------------- | ------------ | ------------- |
-| Backend         | 8            | **66**  |
-| Frontend        | 20           | **81**  |
-| **Total** | **28** | **147** |
+| Backend         | 24           | **258**  |
+| Frontend        | 30           | **199**  |
+| **Total** | **54** | **457** |
 
 ---
 
@@ -350,7 +350,22 @@ docker build -t seasid .
 docker run -p 8000:8000 -v seasid-data:/app/backend/data seasid
 ```
 
-The production image bundles the Vite-built frontend in a single Python image served on `:8000`. Configure provider credentials in Settings after login; the volume persists the encrypted database and master key.
+The production image bundles the Vite-built frontend **and serves it from the
+same API process on `:8000`** (the API routes match first; the SPA catch-all
+handles everything else). Configure provider credentials in Settings after
+login; the volume persists the encrypted database and master key.
+
+**Required for any real deployment:** set `SEASID_AUTH_SECRET` (≥32 chars) —
+the entrypoint refuses to start with auth enabled and no signing secret
+(audit F-C2-03). Optional `SEASID_SEED_DEMO=1` seeds rule-derived synthetic
+training history for demos; production volumes should skip it.
+
+> **Threat-model note:** the master encryption key (`SEASID_DB_ENCRYPTION_KEY`
+> or `backend/data/seasid.key`) protects provider keys only when an attacker
+> gets the database *without* the key file. In Docker both live on the same
+> volume by design, so at-rest encryption defends single-file exfiltration,
+> not full-volume compromise — pass `SEASID_DB_ENCRYPTION_KEY` from a secret
+> manager for deployments that matter (see `SECURITY.md`).
 
 ---
 
@@ -387,14 +402,14 @@ SeaSID/
 │   │       └── weather.py        # Open-Meteo client
 │   ├── data/                     # SQLite DB, models, CSVs
 │   ├── scripts/                  # CLI utilities
-│   └── tests/                    # pytest suite (66 tests)
+│   └── tests/                    # pytest suite (258 tests)
 ├── frontend/
 │   └── src/
 │       ├── components/           # Sidebar (responsive), AgentFab,
 │       │                         # PBadChart, Dropdown, MarkdownResponse…
 │       ├── pages/                # Dashboard, Forecast, Map, Experiments, Verify, Settings
 │       ├── theme/                # ThemeContext, SidebarContext
-│       └── __tests__/            # Vitest + RTL suite (81 tests)
+│       └── __tests__/            # Vitest + RTL suite (199 tests)
 ├── Dockerfile
 ├── docker-compose.yml
 └── SeaSID.md                     # v1 spec + v1↔v2/v2.1 drift notes

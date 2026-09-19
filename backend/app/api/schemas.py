@@ -15,7 +15,10 @@ from pydantic import BaseModel, Field
 class ForecastHour(BaseModel):
     ts: str
     risk: str
-    p_bad: float
+    # Audit F-B3-02: None means "no trustworthy number" (feature build
+    # failed) — never a fabricated neutral value. `degraded` marks hours
+    # whose value came from the rule fallback or a partially-empty window.
+    p_bad: float | None = None
     viz_label: str
     current_risk: str
     model_used: str
@@ -23,6 +26,7 @@ class ForecastHour(BaseModel):
     # ML model crashed (e.g. feature-schema mismatch), the reason is here.
     # None when the ML prediction succeeded.
     degraded_reason: str | None = None
+    degraded: bool = False
 
 
 class OptimalWindow(BaseModel):
@@ -45,6 +49,9 @@ class ForecastResponse(BaseModel):
     # number of hours that needed the substitution.
     forecast_source: str = "unknown"
     fallback_hours: int = 0
+    # Audit F-B3-02: true when every hour was degraded and the optimal
+    # window had to be chosen from flagged hours.
+    optimal_degraded: bool = False
     # Optional AQICN snapshot — present only when the site has live air data.
     # Without this field Pydantic would silently drop the value assigned in
     # `services.get_forecast()`, leaving air-quality consumers in the dark.
@@ -97,7 +104,11 @@ class VerifyRequest(BaseModel):
     verdict: Literal["dive", "poor_viz", "no_dive"]
     actual_viz_m: float | None = None
     actual_current: Literal["Low", "Moderate", "High"] | None = None
-    comments: str | None = None
+    comments: str | None = Field(default=None, max_length=2000)
+    # Audit F-F3-02: the old free-text "Operator name" input was ignored by
+    # the backend (the authenticated principal is the operator). The shop /
+    # team name is a real display field backed by the shop_name column.
+    shop_name: str | None = Field(default=None, max_length=100)
     # Phase 5: structured reason + operator confidence. Both optional so
     # the existing verify form keeps working until the UI ships the new
     # fields. ``no_go_reason`` is most useful when verdict != "dive".
@@ -121,6 +132,9 @@ class LabelEntry(BaseModel):
     date: str
     label: str
     source: str
+    # Audit F-F3-01: the Verify page's "Site" column previously fell back
+    # to parsing the source string because site_key was missing here.
+    site_key: str | None = None
     actual_viz_m: float | None = None
     actual_current: str | None = None
     comments: str | None = None
@@ -156,8 +170,11 @@ class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
     site_key: str | None = None
-    images: list[ChatImage] = Field(default_factory=list)
-    documents: list[ChatDocument] = Field(default_factory=list)
+    # Audit F-F4-01: operator tool switches from Settings → Agent travel
+    # with each request so disabled tools are genuinely withheld from the LLM.
+    disabled_tools: list[str] = Field(default_factory=list, max_length=30)
+    images: list[ChatImage] = Field(default_factory=list, max_length=4)
+    documents: list[ChatDocument] = Field(default_factory=list, max_length=8)
 
 
 class LoginRequest(BaseModel):
@@ -285,6 +302,11 @@ class HealthResponse(BaseModel):
     # keyed by role (weather / marine / air). The Settings page renders
     # this so operators can see which third-party data sources are live.
     providers: dict[str, str] = {}
+    # Audit F-B2-01/08: surface measured model quality + calibrator so
+    # operators can see HOW MUCH to trust the served numbers.
+    model_n_samples: int | None = None
+    model_auc: float | None = None
+    calibrator_method: str | None = None
 
 
 # ── Admin: user management ───────────────────────────────────────────────

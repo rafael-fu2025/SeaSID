@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api, clearAuthToken, setAuthToken } from '@/api';
 
 const AuthContext = createContext(null);
@@ -38,6 +38,26 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('seasid:auth-expired', handleExpired);
   }, []);
 
+  // Audit F-F1-09: user-scoped caches must not outlive the session.
+  const clearUserCaches = useCallback(() => {
+    try {
+      Object.keys(window.localStorage)
+        .filter((key) => key.startsWith('seasid.forecast.'))
+        .forEach((key) => window.localStorage.removeItem(key));
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      clearUserCaches();
+      setUser(null);
+    };
+    window.addEventListener('seasid:auth-expired', handleExpired);
+    return () => window.removeEventListener('seasid:auth-expired', handleExpired);
+  }, [clearUserCaches]);
+
   const value = useMemo(() => ({
     user,
     loading,
@@ -50,9 +70,10 @@ export function AuthProvider({ children }) {
     },
     logout() {
       clearAuthToken();
+      clearUserCaches();
       setUser(null);
     },
-  }), [loading, user]);
+  }), [loading, user, clearUserCaches]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

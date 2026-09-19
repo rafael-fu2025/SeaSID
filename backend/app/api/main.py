@@ -19,12 +19,19 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from slowapi import Limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -59,10 +66,13 @@ from app.auth import (
     Principal,
     authenticate_user,
     auth_enabled,
+    clear_failures,
     create_access_token,
     ensure_role,
     ensure_site_access,
     get_current_principal,
+    is_locked_out,
+    register_failure,
 )
 from app.api.admin import router as admin_router
 from app.lib.user_store import change_password as db_change_password
@@ -73,24 +83,42 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
 # Explicit allow-list — wildcard CORS was removed in v2.
 # Override via SEASID_ALLOWED_ORIGINS env var (comma-separated).
-import os as _os  # noqa: E402
+# Audit F-B3-08: no wildcard origins (e.g. *.trycloudflare.com) — anyone can
+# mint such a subdomain; a tunnel demo should add its exact URL instead.
 _DEFAULT_ORIGINS = (
     "http://localhost:5173,http://localhost:5174,http://localhost:5175,"
     "http://localhost:5176,http://localhost:5177,http://localhost:5178,"
     "http://localhost:3000,http://localhost:8000,"
     "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,"
     "http://127.0.0.1:5176,http://127.0.0.1:5177,http://127.0.0.1:5178,"
-    "http://127.0.0.1:3000,http://127.0.0.1:8000,"
-    # cloudflared quick-tunnel hostnames (regenerated on each run; allow
-    # all trycloudflare.com subdomains so dev tunnels work out of the box).
-    "https://feature-combine-increases-evolution.trycloudflare.com,"
-    "https://uniprotkb-area-oriental-ben.trycloudflare.com,"
-    "https://*.trycloudflare.com"
+    "http://127.0.0.1:3000,http://127.0.0.1:8000"
 )
 ALLOWED_ORIGINS = [
-    o.strip() for o in _os.getenv("SEASID_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    o.strip() for o in os.getenv("SEASID_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
     if o.strip()
 ]
+
+
+async def _alert_scheduler_loop() -> None:
+    """Periodically evaluate alert thresholds for every site (audit F-B1-03).
+
+    Alerts were previously pull-only via POST /alerts/run — nothing fired
+    unless someone pressed the button. The loop runs the (synchronous) DB
+    check in a worker thread so the event loop stays responsive.
+    """
+    from app.lib.alerts import check_all_sites
+
+    interval = float(os.getenv("SEASID_ALERT_INTERVAL_S", "1800"))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            new_alerts = await asyncio.to_thread(check_all_sites)
+            if new_alerts:
+                logger.info("Scheduled alert check created %d alert(s)", len(new_alerts))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Scheduled alert check failed")
 
 
 @asynccontextmanager
@@ -98,7 +126,26 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup (FastAPI lifespan replaces on_event)."""
     init_db()
     logger.info("SeaSID API started (allowed origins: %s)", ALLOWED_ORIGINS)
+
+    alert_task = None
+    if os.getenv("SEASID_ALERT_SCHED_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        alert_task = asyncio.create_task(_alert_scheduler_loop())
+        logger.info("Alert scheduler enabled (interval %ss)", os.getenv("SEASID_ALERT_INTERVAL_S", "1800"))
+
     yield
+
+    if alert_task is not None:
+        alert_task.cancel()
+        logger.info("Alert scheduler stopped")
+
+    # Audit F-B5-05: tear down the MiniMax MCP subprocess so it cannot
+    # outlive the API (uvicorn --reload used to leak uvx processes).
+    try:
+        from app.lib import agent_mcp
+        await agent_mcp.shutdown()
+    except Exception:
+        logger.debug("MCP shutdown skipped", exc_info=True)
+
     logger.info("SeaSID API shutting down")
 
 
@@ -112,22 +159,53 @@ app = FastAPI(
 )
 app.include_router(admin_router)
 
+# ── Rate limiting (audit F-B3-04) ─────────────────────────────────────────
+# slowapi with in-memory storage — correct for the single-worker deploys this
+# project targets. Login, agent chat (LLM spend), ingest, and experiments are
+# the expensive endpoints. Disable via SEASID_RATELIMIT_ENABLED=0 (tests).
+limiter = Limiter(
+    key_func=get_remote_address,
+    enabled=os.getenv("SEASID_RATELIMIT_ENABLED", "1").strip().lower()
+    not in {"0", "false", "no", "off"},
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Server-side cancellation for the experiment suite (audit F-F6-01): the
+# Cancel button must stop the TRAINING, not just detach the UI.
+_experiment_cancel_event: threading.Event | None = None
+
 
 # ── Auth ───────────────────────────────────────────────────────────────────
 @app.post("/api/v1/auth/login", response_model=TokenResponse)
-def login(request: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest):
     """Authenticate and return a JWT bearer token + the user profile.
 
     When authentication is disabled, returns a synthetic admin token so the
     UI keeps working in local dev. When enabled, looks up users in the DB
     with a fallback to env-configured and dev-default credentials.
+    Rate limited (5/min/IP) with a temporary per-username+IP lockout after
+    repeated failures (audit F-B3-04).
     """
-    if not auth_enabled():
-        principal = Principal("dev", "dev", "admin", ("*",), authenticated=False)
-    else:
-        principal = authenticate_user(request.username, request.password)
+    client_ip = get_remote_address(request) or "unknown"
+
+    if auth_enabled():
+        if is_locked_out(payload.username, client_ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed sign-in attempts — try again later",
+            )
+
+        principal = authenticate_user(payload.username, payload.password)
         if principal is None:
+            register_failure(payload.username, client_ip)
+            logger.warning("Failed login for %r from %s", payload.username, client_ip)
             raise HTTPException(status_code=401, detail="Invalid username or password")
+        clear_failures(payload.username, client_ip)
+    else:
+        principal = Principal("dev", "dev", "admin", ("*",), authenticated=False)
+
     token, expires_in = create_access_token(principal)
     return TokenResponse(
         access_token=token,
@@ -191,14 +269,30 @@ app.add_middleware(
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health():
     """Health check endpoint."""
-    from app.lib.model import load_best, get_model_type, selected_tier
+    from app.lib.model import get_model_type, selected_tier
     from app.lib.db import engine
     from app.lib.providers import active_providers
     from sqlalchemy import inspect
 
-    bundle = load_best()
-    model_type = get_model_type(bundle)
-    tier, reason = selected_tier()
+    # Audit F-B3-07: a missing/invalid model artifact is a degraded
+    # deployment, not a crashed health endpoint — monitors need a signal,
+    # not a 500.
+    try:
+        from app.lib.model import load_best
+        bundle = load_best()
+        model_type = get_model_type(bundle)
+        status_value = "ok"
+    except Exception as exc:
+        logger.exception("Model failed to load for /health")
+        bundle = None
+        model_type = "unavailable"
+        status_value = "degraded"
+        selected_tier_reason = f"model load failed: {type(exc).__name__}"
+    tier, reason = (
+        selected_tier()
+        if status_value == "ok"
+        else ("unavailable", selected_tier_reason)
+    )
 
     inspector = inspect(engine)
     tables = inspector.get_table_names()
@@ -212,14 +306,41 @@ def health():
 
     # Phase 3: include the tier qualifier so external monitors can see
     # whether we're using the LSTM / XGBoost / rules and why.
+    # Audit F-B2-01/08: surface measured quality + calibrator method so
+    # operators can judge how much to trust the served probabilities.
+    model_n_samples = None
+    model_auc = None
+    if isinstance(bundle, dict):
+        metrics = {}
+        metrics_path = DATA_DIR / (
+            "lstm_metrics.json" if model_type == "lstm" else "xgb_metrics.json"
+        )
+        try:
+            with open(metrics_path) as f:
+                metrics = json.load(f)
+        except Exception:
+            metrics = {}
+        model_n_samples = bundle.get("n_samples") or metrics.get("n_samples")
+        model_auc = metrics.get("auc_roc")
+
+    cal_method = None
+    try:
+        from app.lib.model import get_calibrator
+        cal_method = get_calibrator().method
+    except Exception:
+        cal_method = None
+
     response = HealthResponse(
-        status="ok",
+        status=status_value,
         version="1.0.0",
         model_loaded=model_type,
         selected_tier=tier,
         selection_reason=reason,
         db_tables=len(tables),
         providers=providers,
+        model_n_samples=model_n_samples,
+        model_auc=model_auc,
+        calibrator_method=cal_method,
     )
     return response
 
@@ -274,30 +395,36 @@ def forecast(
             fallback_hours=result.get("fallback_hours", 0),
         )
     except Exception as exc:
-        logger.error("Forecast error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Forecast error")
+        raise HTTPException(status_code=500, detail="Forecast failed") from exc
 
 
 # ── Ingest ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/ingest", response_model=IngestResponse)
-def ingest(request: IngestRequest):
-    """Pull weather + tide data for a site."""
+@limiter.limit("2/minute")
+def ingest(
+    request: Request,
+    payload: IngestRequest,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Pull weather + tide data for a site (operator+; audit F-B3-01)."""
     from app.lib.ingest import ingest_site
     from app.api.services import invalidate_forecast_cache
 
-    if request.site_key not in site_keys():
-        raise HTTPException(status_code=404, detail=f"Unknown site: {request.site_key}")
+    ensure_role(principal, "operator", "data_steward", "admin")
+    if payload.site_key not in site_keys():
+        raise HTTPException(status_code=404, detail=f"Unknown site: {payload.site_key}")
 
     try:
-        result = ingest_site(request.site_key, hours=request.hours)
+        result = ingest_site(payload.site_key, hours=payload.hours)
         # Phase 4: drop the cached forecast so the next /forecast call picks
         # up the freshly-ingested data instead of returning a stale snapshot.
-        invalidate_forecast_cache(request.site_key)
+        invalidate_forecast_cache(payload.site_key)
         return IngestResponse(site_key=request.site_key, **result)
     except Exception as exc:
-        logger.error("Ingest error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Ingest error")
+        raise HTTPException(status_code=500, detail="Ingest failed") from exc
 
 
 # ── Verify ─────────────────────────────────────────────────────────────────
@@ -326,8 +453,8 @@ def verify(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.error("Verify error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Verify error")
+        raise HTTPException(status_code=500, detail="Verification failed") from exc
 
 
 # ── Labels ─────────────────────────────────────────────────────────────────
@@ -336,14 +463,15 @@ def verify(
 def labels(
     site: str = Query(default="all", description="Site key or 'all'"),
     limit: int = Query(default=50, ge=1, le=200),
+    _principal: Principal = Depends(get_current_principal),
 ):
-    """Fetch recent labels for a site."""
+    """Fetch recent labels for a site (authenticated; audit F-B3-01)."""
     try:
         result = get_labels(site, limit=limit)
         return LabelsResponse(**result)
     except Exception as exc:
-        logger.error("Labels error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Labels error")
+        raise HTTPException(status_code=500, detail="Could not load labels") from exc
 
 
 # ── Active Learning (Phase 8) ────────────────────────────────────────────
@@ -353,6 +481,7 @@ def active_learning_suggestions(
     site: str = Query(..., description="Site key"),
     days: int = Query(default=7, ge=1, le=30),
     top_n: int = Query(default=3, ge=1, le=10),
+    _principal: Principal = Depends(get_current_principal),
 ):
     """Return up to ``top_n`` past dates where an operator verification
     would reduce model uncertainty the most.
@@ -382,19 +511,21 @@ def active_learning_suggestions(
             suggestions=suggestions,
         )
     except Exception as exc:
-        logger.error("Active learning error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Active learning error")
+        raise HTTPException(status_code=500, detail="Could not build suggestions") from exc
 
 
 @app.get("/api/v1/active-learning/summary", response_model=ActiveLearningSummaryResponse)
-def active_learning_summary():
+def active_learning_summary(
+    _principal: Principal = Depends(get_current_principal),
+):
     """Cross-site snapshot used by the Settings/Inspector panel."""
     from app.lib.active_learning import active_learning_summary as _summary
     try:
         return ActiveLearningSummaryResponse(**_summary())
     except Exception as exc:
-        logger.error("Active learning summary error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Active learning summary error")
+        raise HTTPException(status_code=500, detail="Could not build summary") from exc
 
 
 # ── Alerts ─────────────────────────────────────────────────────────────────
@@ -417,20 +548,29 @@ def alerts(
         result = get_recent_alerts(site_key=site, hours=hours)
         return AlertsResponse(alerts=result)
     except Exception as exc:
-        logger.error("Alerts error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Alerts error")
+        raise HTTPException(status_code=500, detail="Could not load alerts") from exc
 
 
 @app.post("/api/v1/alerts/run", response_model=AlertsRunResponse)
-def alerts_run():
+@limiter.limit("6/hour")
+def alerts_run(
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+):
     """Explicit write-side endpoint to trigger alert evaluation for all sites.
 
-    Idempotent — AlertStore dedupes via the (site_key, kind, ts_hour) unique constraint.
+    Idempotent — AlertStore dedupes via the (site_key, kind, ts_hour) unique
+    constraint. Requires operator+ (audit F-B3-01); unauthenticated triggers
+    would also fire SMTP emails.
     """
     from app.lib.alerts import check_all_sites
 
+    ensure_role(principal, "operator", "data_steward", "admin")
     try:
         new_alerts = check_all_sites()
+        from app.lib import audit
+        audit.record("alerts.run", actor=principal.subject, detail={"created": len(new_alerts)})
         return AlertsRunResponse(
             status="success",
             site_results=[
@@ -440,33 +580,45 @@ def alerts_run():
             total_created=len(new_alerts),
         )
     except Exception as exc:
-        logger.error("Alerts run error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Alerts run error")
+        raise HTTPException(status_code=500, detail="Alert evaluation failed") from exc
 
 
 # ── Agent ──────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/agent/chat", response_model=AgentChatResponse)
-async def agent_chat(request: AgentChatRequest):
-    """Chat with the SeaSID AI agent."""
+@limiter.limit("10/minute")
+async def agent_chat(
+    request: Request,
+    payload: AgentChatRequest,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Chat with the SeaSID agent (authenticated; audit F-B3-01/F-B5-02)."""
     from app.lib.agent import chat
 
     try:
         result = await chat(
-            user_message=request.message,
-            conversation_id=request.conversation_id,
-            site_key=request.site_key,
-            images=[img.model_dump() for img in request.images],
-            documents=[doc.model_dump() for doc in request.documents],
+            user_message=payload.message,
+            conversation_id=payload.conversation_id,
+            site_key=payload.site_key,
+            owner_id=principal.subject,
+            images=[img.model_dump() for img in payload.images],
+            documents=[doc.model_dump() for doc in payload.documents],
+            disabled_tools=payload.disabled_tools,
         )
         return AgentChatResponse(**result)
     except Exception as exc:
-        logger.error("Agent chat error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Agent chat error")
+        raise HTTPException(status_code=500, detail="Agent chat failed") from exc
 
 
 @app.post("/api/v1/agent/chat/stream")
-async def agent_chat_stream(request: AgentChatRequest):
+@limiter.limit("10/minute")
+async def agent_chat_stream(
+    request: Request,
+    payload: AgentChatRequest,
+    principal: Principal = Depends(get_current_principal),
+):
     """Streaming variant — Server-Sent Events of {type, ...} events.
 
     Event types (see `app.lib.agent.chat_stream` for the source of truth):
@@ -482,11 +634,13 @@ async def agent_chat_stream(request: AgentChatRequest):
 
     async def event_generator():
         async for event in chat_stream(
-            user_message=request.message,
-            conversation_id=request.conversation_id,
-            site_key=request.site_key,
-            images=[img.model_dump() for img in request.images],
-            documents=[doc.model_dump() for doc in request.documents],
+            user_message=payload.message,
+            conversation_id=payload.conversation_id,
+            site_key=payload.site_key,
+            owner_id=principal.subject,
+            images=[img.model_dump() for img in payload.images],
+            documents=[doc.model_dump() for doc in payload.documents],
+            disabled_tools=payload.disabled_tools,
         ):
             yield f"data: {json.dumps(event, default=str)}\n\n"
 
@@ -502,23 +656,28 @@ async def agent_chat_stream(request: AgentChatRequest):
 
 
 @app.get("/api/v1/agent/briefing", response_model=BriefingResponse)
-async def agent_briefing(site: str = Query(..., description="Site key")):
-    """Generate an AI dive briefing for a site."""
+async def agent_briefing(
+    site: str = Query(..., description="Site key"),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Generate an AI dive briefing for a site (authenticated; audit F-B3-01)."""
     from app.lib.agent import generate_briefing
 
     if site not in site_keys():
         raise HTTPException(status_code=404, detail=f"Unknown site: {site}")
 
     try:
-        result = await generate_briefing(site)
+        result = await generate_briefing(site, owner_id=principal.subject)
         return BriefingResponse(**result)
     except Exception as exc:
-        logger.error("Briefing error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Briefing error")
+        raise HTTPException(status_code=500, detail="Briefing generation failed") from exc
 
 
 @app.get("/api/v1/agent/tools")
-async def list_agent_tools() -> dict:
+async def list_agent_tools(
+    _principal: Principal = Depends(get_current_principal),
+) -> dict:
     """Return the live tool registry (built-ins + MiniMax MCP web tools).
 
     The Settings page calls this so it doesn't have to mirror
@@ -527,7 +686,7 @@ async def list_agent_tools() -> dict:
     first call (which boots the subprocess). When the MCP is unavailable
     (no key, no uvx, etc.) the response still succeeds with the built-ins.
     """
-    from app.lib.agent_tools import _static_tool_definitions
+    from app.lib.agent_tools import _static_tool_definitions, skipped_mcp_tools
     from app.lib import agent_mcp
 
     definitions = _static_tool_definitions()
@@ -536,7 +695,14 @@ async def list_agent_tools() -> dict:
     try:
         mcp_tools_raw = await agent_mcp.get_mcp_tools()
         mcp_status = "connected" if mcp_tools_raw else "unavailable"
+        allowlist = {
+            name.strip()
+            for name in os.getenv("SEASID_MCP_TOOL_ALLOWLIST", "web_search,web_browse").split(",")
+            if name.strip()
+        }
         for tool in mcp_tools_raw:
+            if tool.name and tool.name not in allowlist:
+                continue  # blocked by the allowlist — not exposed to the LLM
             definitions.append({
                 "type": "function",
                 "function": {
@@ -568,6 +734,7 @@ async def list_agent_tools() -> dict:
             "status": mcp_status,
             "server": "minimax",
             "tools": mcp_tools,
+            "blocked": skipped_mcp_tools(),
         },
     }
 
@@ -575,8 +742,10 @@ async def list_agent_tools() -> dict:
 # ── Experiments ────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/experiments/results", response_model=ExperimentResultsResponse)
-def experiment_results():
-    """Get the latest experiment results."""
+def experiment_results(
+    _principal: Principal = Depends(get_current_principal),
+):
+    """Get the latest experiment results (authenticated; audit F-B3-01)."""
     results_path = DATA_DIR / "experiment_results.json"
 
     if not results_path.exists():
@@ -593,13 +762,18 @@ def experiment_results():
             data = json.load(f)
         return ExperimentResultsResponse(**data)
     except Exception as exc:
-        logger.error("Experiment results error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Experiment results error")
+        raise HTTPException(status_code=500, detail="Could not load results") from exc
 
 
 @app.post("/api/v1/experiments/run", response_model=ExperimentRunResponse)
-def run_experiments():
-    """Trigger the experiment suite (may take several minutes)."""
+@limiter.limit("2/minute")
+def run_experiments(
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Trigger the experiment suite (operator+; may take several minutes)."""
+    ensure_role(principal, "operator", "data_steward", "admin")
     try:
         from datetime import date, datetime, timezone
         import numpy as np
@@ -626,6 +800,7 @@ def run_experiments():
         X_rows, y_vals, X_seqs = [], [], []
         label_dates: list[date] = []
         label_site_keys: list[str] = []
+        label_sources: list[str] = []
         for lbl in labels:
             target_ts = datetime(
                 lbl.date.year, lbl.date.month, lbl.date.day,
@@ -639,6 +814,7 @@ def run_experiments():
                 y_vals.append(label_to_binary(lbl.label))
                 label_dates.append(lbl.date)
                 label_site_keys.append(lbl.site_key)
+                label_sources.append(lbl.source)
             except Exception:
                 continue
 
@@ -651,7 +827,12 @@ def run_experiments():
             X_flat, y, X_seq, y_arr,
             label_dates=label_dates,
             label_site_keys=label_site_keys,
+            label_sources=label_sources,
         )
+
+        from app.lib import audit
+        audit.record("experiments.run", actor=principal.subject,
+                     detail={"best_model": results.get("best_model")})
 
         # Reload the cached ML bundle so the next /forecast hits fresh weights.
         try:
@@ -676,8 +857,21 @@ def run_experiments():
             results=results,
         )
     except Exception as exc:
-        logger.error("Experiment run error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Experiment run error")
+        raise HTTPException(status_code=500, detail="Experiment run failed") from exc
+
+
+@app.post("/api/v1/experiments/run/cancel")
+def cancel_experiments(
+    principal: Principal = Depends(get_current_principal),
+):
+    """Cancel a running experiment suite server-side (audit F-F6-01)."""
+    global _experiment_cancel_event
+    ensure_role(principal, "operator", "data_steward", "admin")
+    if _experiment_cancel_event is None:
+        return {"ok": True, "was_running": False}
+    _experiment_cancel_event.set()
+    return {"ok": True, "was_running": True}
 
 
 @app.post("/api/v1/experiments/run/stream")
@@ -745,6 +939,7 @@ async def run_experiments_stream(
             X_rows, y_vals, X_seqs = [], [], []
             label_dates: list[date] = []
             label_site_keys: list[str] = []
+            label_sources: list[str] = []
             for lbl in labels:
                 target_ts = datetime(
                     lbl.date.year, lbl.date.month, lbl.date.day,
@@ -757,6 +952,7 @@ async def run_experiments_stream(
                     y_vals.append(label_to_binary(lbl.label))
                     label_dates.append(lbl.date)
                     label_site_keys.append(lbl.site_key)
+                    label_sources.append(lbl.source)
                 except Exception:
                     continue
         except Exception as exc:
@@ -796,16 +992,28 @@ async def run_experiments_stream(
                     payload[key] = metrics[key]
             _enqueue(payload)
 
+        global _experiment_cancel_event
+        from app.lib.experiments import ExperimentCancelled
+
+        # Fresh cancel event per run (audit F-F6-01); /experiments/run/cancel
+        # sets it to stop the training server-side.
+        cancel_event = threading.Event()
+        _experiment_cancel_event = cancel_event
+
         def run_in_thread() -> None:
             try:
                 results = run_full_experiment_suite(
                     X_flat, y, X_seq, y_arr,
                     label_dates=label_dates,
                     label_site_keys=label_site_keys,
+                    label_sources=label_sources,
                     progress_callback=progress_callback,
                     metric_callback=metric_callback,
+                    cancel_event=cancel_event,
                 )
                 _enqueue({"type": "_done", "results": results})
+            except ExperimentCancelled:
+                _enqueue({"type": "_cancelled"})
             except Exception as exc:
                 logger.exception("Experiments stream suite error")
                 _enqueue({"type": "_error", "message": str(exc)})
@@ -856,6 +1064,13 @@ async def run_experiments_stream(
                 yield f"data: {json.dumps({'type': 'error', 'message': event['message']})}\n\n"
                 continue
 
+            if kind == "_cancelled":
+                # Cancelled server-side: no model reload, no cache wipe —
+                # the old artifacts are still valid and still cached.
+                yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'idle', 'samples': n_samples})}\n\n"
+                continue
+
             # Forward ``log`` / ``metric`` frames verbatim.
             yield f"data: {json.dumps(event, default=str)}\n\n"
 
@@ -868,3 +1083,19 @@ async def run_experiments_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+# ── Static frontend (production image) ────────────────────────────────────
+
+# The production Docker image copies the Vite build to ../frontend/dist and
+# serves it from this same process (audit F-C2-02: the image previously
+# built the frontend but nothing ever served it). API routes are matched
+# first — the catch-all mount only handles everything else, so /api/v1/*
+# 404s remain JSON. Disable with SEASID_SERVE_FRONTEND=0.
+_dist_dir = DATA_DIR.parent / "frontend" / "dist"
+_serve_frontend = os.getenv("SEASID_SERVE_FRONTEND", "auto").strip().lower()
+if _serve_frontend not in {"0", "false", "no", "off"} and _dist_dir.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(_dist_dir), html=True), name="spa")
+    logger.info("Serving frontend from %s", _dist_dir)

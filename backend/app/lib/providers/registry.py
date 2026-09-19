@@ -45,8 +45,11 @@ def _build_weather(name: str) -> Optional[WeatherProvider]:
         return None
     if name in ("open_meteo", "open-meteo", "default"):
         return OpenMeteoWeatherProvider()
-    logger.warning("Unknown weather provider '%s' — falling back to Open-Meteo", name)
-    return OpenMeteoWeatherProvider()
+    # Audit F-B6-05: a typo'd env var silently serving Open-Meteo makes the
+    # provenance chips lie about the data source. Fail loudly instead.
+    raise ValueError(
+        f"Unknown SEASID_PROVIDER_WEATHER={name!r} (expected 'open_meteo' or 'off')"
+    )
 
 
 def _build_marine(name: str) -> Optional[MarineProvider]:
@@ -62,8 +65,9 @@ def _build_marine(name: str) -> Optional[MarineProvider]:
                 "marine provider will return empty data."
             )
         return provider
-    logger.warning("Unknown marine provider '%s' — falling back to Open-Meteo Marine", name)
-    return OpenMeteoMarineProvider()
+    raise ValueError(
+        f"Unknown SEASID_PROVIDER_MARINE={name!r} (expected 'open_meteo', 'stormglass' or 'off')"
+    )
 
 
 def _build_air(name: str) -> Optional[AirQualityProvider]:
@@ -77,8 +81,9 @@ def _build_air(name: str) -> Optional[AirQualityProvider]:
                 "air provider will return None."
             )
         return provider
-    logger.warning("Unknown air provider '%s' — air data disabled", name)
-    return None
+    raise ValueError(
+        f"Unknown SEASID_PROVIDER_AIR={name!r} (expected 'aqicn' or 'off')"
+    )
 
 
 # ── Module-level singletons (lazy) ─────────────────────────────────────────

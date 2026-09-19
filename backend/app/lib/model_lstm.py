@@ -167,12 +167,6 @@ def train_lstm(
 
     n_features = X_sequences.shape[2] if X_sequences.ndim == 3 else len(FEATURE_COLUMNS)
 
-    # ── Normalize features ─────────────────────────────────────────────
-    scaler = StandardScaler()
-    original_shape = X_sequences.shape
-    X_flat = X_sequences.reshape(-1, n_features)
-    X_scaled = scaler.fit_transform(X_flat).reshape(original_shape)
-
     # ── Train/val split ────────────────────────────────────────────────
     # Phase 2: time-aware split when label_dates is supplied. Without
     # dates we fall back to a deterministic random shuffle (legacy tests).
@@ -205,6 +199,16 @@ def train_lstm(
         train_idx = indices[:split_idx]
         val_idx = indices[split_idx:]
 
+    # ── Normalize features ─────────────────────────────────────────────
+    # Audit F-B2-03: the scaler is fit on TRAINING rows only — fitting on
+    # the full dataset leaks validation statistics into early stopping,
+    # and the persisted metrics were computed in-sample.
+    scaler = StandardScaler()
+    original_shape = X_sequences.shape
+    X_flat = X_sequences.reshape(-1, n_features)
+    scaler.fit(X_flat[train_idx])
+    X_scaled = scaler.transform(X_flat).reshape(original_shape)
+
     X_train = torch.FloatTensor(X_scaled[train_idx]).to(DEVICE)
     y_train = torch.FloatTensor(y[train_idx]).to(DEVICE)
     X_val = torch.FloatTensor(X_scaled[val_idx]).to(DEVICE) if len(val_idx) > 0 else None
@@ -234,12 +238,12 @@ def train_lstm(
         ).to(DEVICE)
 
     # Phase 2: BCEWithLogitsLoss replaces BCELoss so the model's raw logits
-    # feed directly into the loss. We compute pos_weight from the training
-    # labels unless the config overrides it — this stops the model from
-    # ignoring the minority class (40+ positives vs 60+ negatives in the
-    # current dataset).
-    n_pos = float(y.sum())
-    n_neg = float(len(y) - n_pos)
+    # feed directly into the loss. We compute pos_weight from the TRAINING
+    # labels (audit F-B2-03: the previous computation included validation
+    # rows) unless the config overrides it — this stops the model from
+    # ignoring the minority class.
+    n_pos = float(y[train_idx].sum())
+    n_neg = float(len(train_idx) - n_pos)
     if config.pos_weight is None:
         if n_pos == 0 or n_neg == 0:
             pw_tensor = torch.tensor([1.0], device=DEVICE)
@@ -312,8 +316,17 @@ def train_lstm(
         model.load_state_dict(best_state)
 
     # ── Compute metrics ────────────────────────────────────────────────
+    # Audit F-B2-03: persisted metrics are computed on the VALIDATION block
+    # only (data the model never trained on). In-sample numbers are kept
+    # separately under "train" for diagnostics — they must never be read
+    # as generalization performance.
     model.eval()
-    metrics = _compute_metrics(model, X_scaled, y, config)
+    if X_val is not None and len(X_val) > 0:
+        metrics = _compute_metrics_np(model, X_scaled[val_idx], y[val_idx])
+        metrics["train"] = _compute_metrics_np(model, X_scaled[train_idx], y[train_idx])
+    else:
+        metrics = _compute_metrics_np(model, X_scaled[train_idx], y[train_idx])
+        metrics["metrics_source"] = "train_only_no_validation_split"
     metrics["epochs_trained"] = len(train_losses)
     metrics["best_val_loss"] = float(best_val_loss) if best_val_loss != float("inf") else None
     metrics["final_train_loss"] = train_losses[-1] if train_losses else None
@@ -337,39 +350,39 @@ def train_lstm(
     )
 
 
-def _compute_metrics(
+def _compute_metrics_np(
     model: nn.Module,
-    X_scaled: np.ndarray,
+    X: np.ndarray,
     y: np.ndarray,
-    config: LSTMTrainConfig,
 ) -> dict:
-    """Compute classification metrics on the full dataset.
+    """Compute classification metrics on already-scaled numpy sequences.
 
-    Phase 2 fix: the model now returns raw logits (no final Sigmoid), so we
-    apply ``torch.sigmoid`` here before thresholding for accuracy/F1/AUC.
+    Audit F-B2-03: metrics are computed per data block (validation for the
+    persisted numbers) instead of on the full in-sample dataset.
     """
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
     model.eval()
     with torch.no_grad():
-        X_tensor = torch.FloatTensor(X_scaled).to(DEVICE)
+        X_tensor = torch.FloatTensor(X).to(DEVICE)
         logits = model(X_tensor).cpu().numpy()
     # Map logits → probabilities for downstream metrics.
     proba = 1.0 / (1.0 + np.exp(-logits))
 
     preds = (proba >= 0.5).astype(int)
+    y_arr = np.asarray(y)
 
     metrics = {
-        "accuracy": float(accuracy_score(y, preds)),
-        "precision": float(precision_score(y, preds, zero_division=0)),
-        "recall": float(recall_score(y, preds, zero_division=0)),
-        "f1": float(f1_score(y, preds, zero_division=0)),
+        "accuracy": float(accuracy_score(y_arr, preds)),
+        "precision": float(precision_score(y_arr, preds, zero_division=0)),
+        "recall": float(recall_score(y_arr, preds, zero_division=0)),
+        "f1": float(f1_score(y_arr, preds, zero_division=0)),
     }
 
     # AUC-ROC (requires both classes present)
-    if len(np.unique(y)) > 1:
+    if len(np.unique(y_arr)) > 1:
         try:
-            metrics["auc_roc"] = float(roc_auc_score(y, proba))
+            metrics["auc_roc"] = float(roc_auc_score(y_arr, proba))
         except ValueError:
             metrics["auc_roc"] = None
     else:
